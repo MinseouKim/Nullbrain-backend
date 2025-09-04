@@ -1,9 +1,16 @@
 # 가상환경 명령어
 
+[생성]
+```cmd
+python -m venv .venv
+```
+
 [활성화]
 ```cmd
+cd Nullbrain-backend/backend
 .venv\Scripts\activate
 ```
+
 [비활성화]
 ```cmd
 deactivate
