@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>웹캠 토글</title>
+</head>
+<link rel="stylesheet" href="index_styles.css"> </head>
+<body>
+    <h1>웹캠 영상</h1>
+    <button id="toggleButton">웹캠 켜기</button>
+    <br><br>
+    <img id="videoStream" width="640" height="480">
+
+    <script>
+        let ws;
+        const toggleButton = document.getElementById('toggleButton');
+        const videoStream = document.getElementById('videoStream');
+
+        function connectWebSocket() {
+            if (ws && ws.readyState === WebSocket.OPEN) { return; }
+            ws = new WebSocket("ws://localhost:8000/ws");
+
+            ws.onmessage = (event) => {
+                const blob = new Blob([event.data], { type: 'image/jpeg' });
+                const url = URL.createObjectURL(blob);
+                videoStream.src = url;
+            };
+            ws.onopen = () => {
+                console.log("WebSocket 연결 성공");
+                toggleButton.textContent = "웹캠 끄기";
+            };
+            ws.onclose = () => {
+                console.log("WebSocket 연결 종료");
+                toggleButton.textContent = "웹캠 켜기";
+                videoStream.src = "";
+            };
+        }
+
+        function disconnectWebSocket() {
+            if (ws && ws.readyState === WebSocket.OPEN) { ws.close(); }
+        }
+
+        toggleButton.addEventListener('click', () => {
+            if (toggleButton.textContent === "웹캠 켜기") {
+                connectWebSocket();
+            } else {
+                disconnectWebSocket();
+            }
+        });
+    </script>
+</body>
+</html>
