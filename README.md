@@ -5,13 +5,13 @@
 python -m venv .venv
 ```
 
-[활성화]
+[가상환경 활성화]
 ```cmd
 cd Nullbrain-backend/backend
 .venv\Scripts\activate
 ```
 
-[비활성화]
+[가상환경 비활성화]
 ```cmd
 deactivate
 ```
@@ -38,3 +38,5 @@ app.main:app → app 폴더 안 main.py에 있는 app 객체를 가리킵니다.
 웹브라우저 접속 테스트 : http://localhost:8000/api/ping
 결과 : {"message":"pong"}
 
+
+웹캠 페이지 : http://127.0.0.1:8000/static/index.html
