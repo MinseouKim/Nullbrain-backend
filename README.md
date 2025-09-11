@@ -3,6 +3,7 @@
 [생성]
 ```cmd
 python -m venv .venv
+py -3.11 -m venv .venv
 ```
 
 [가상환경 활성화]
@@ -31,6 +32,10 @@ pip install uvicorn
 pip install opencv-python
 ```
 opencv
+
+```cmd
+pip install mediapipe opencv-python
+```
 
 
 
