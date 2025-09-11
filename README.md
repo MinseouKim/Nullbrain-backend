@@ -5,10 +5,19 @@
 python -m venv .venv
 ```
 
+[OpenCv 설치]
+```cmd
+pip install opencv-python
+```
+
+
 [가상환경 활성화]
 ```cmd
 cd Nullbrain-backend/backend
-.venv\Scripts\activate
+source .venv/Scripts/activate
+
+bash
+source .venv/bin/activate
 ```
 
 [가상환경 비활성화]
