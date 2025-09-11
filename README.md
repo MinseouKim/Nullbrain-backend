@@ -8,7 +8,10 @@ python -m venv .venv
 [가상환경 활성화]
 ```cmd
 cd Nullbrain-backend/backend
-.venv\Scripts\activate
+source .venv/Scripts/activate
+
+bash
+source .venv/bin/activate
 ```
 ```bash
 source .venv/Scripts/activate
@@ -24,8 +27,14 @@ deactivate
 pip install "fastapi[all]"
 pip install uvicorn
 ```
-fastapi[all] : FastAPI의 모든 부가 기능을 한 번에 설치
-uvicorn : 웹프레임워크 => 앱 실행하게끔
+- fastapi[all] : FastAPI의 모든 부가 기능을 한 번에 설치
+- uvicorn : 웹프레임워크 => 앱 실행하게끔
+
+```cmd
+pip install opencv-python
+```
+opencv
+
 
 
 ### 서버 실행
