@@ -58,3 +58,7 @@ app.main:app → app 폴더 안 main.py에 있는 app 객체를 가리킵니다.
 
 
 웹캠 페이지 : http://127.0.0.1:8000/static/index.html
+
+스쿼트 확인 : http://127.0.0.1:8000/squat
+
+푸시업 확인 : http://127.0.0.1:8000/pushup
