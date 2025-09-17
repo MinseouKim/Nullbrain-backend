@@ -1,11 +1,11 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>웹캠 토글</title>
+    <title>AI 홈 트레이너</title>
+    <link rel="stylesheet" href="/static/index_styles.css">
 </head>
-<link rel="stylesheet" href="/static/index_styles.css"> </head>
 <body>
-    <h1>웹캠 영상</h1>
+    <h1>AI 홈 트레이너</h1>
     <button id="toggleButton">웹캠 켜기</button>
     <br><br>
     <img id="videoStream" width="640" height="480">
@@ -14,10 +14,17 @@
         let ws;
         const toggleButton = document.getElementById('toggleButton');
         const videoStream = document.getElementById('videoStream');
+        
+        // main.py에서 이 부분을 동적으로 교체해줍니다.
+        const exercise = "EXERCISE_PLACEHOLDER"; // [!code focus]
 
         function connectWebSocket() {
             if (ws && ws.readyState === WebSocket.OPEN) { return; }
-            ws = new WebSocket("ws://localhost:8000/ws");
+            
+            // 운동 이름에 맞는 웹소켓 주소로 접속
+            const wsURL = `ws://localhost:8000/ws/${exercise}`; // [!code focus]
+            console.log("Connecting to:", wsURL); // [!code ++]
+            ws = new WebSocket(wsURL); // [!code focus]
 
             ws.onmessage = (event) => {
                 const blob = new Blob([event.data], { type: 'image/jpeg' });

@@ -1,0 +1,13 @@
+# Python Virtual Environments
+# 파이썬 가상환경 폴더를 무시합니다.
+.venv/
+venv/
+
+# Python cache files
+# 파이썬이 자동으로 생성하는 캐시 폴더와 파일을 무시합니다.
+__pycache__/
+*.pyc
+
+# IDE/Editor specific files
+# VS Code 설정 폴더를 무시합니다. (다른 사람과 공유할 필요 없음)
+.vscode/

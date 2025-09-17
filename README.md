@@ -2,7 +2,7 @@
 
 [생성]
 ```cmd
-python -m venv .venv
+py -3.11 -m venv .venv
 ```
 
 [가상환경 활성화]
@@ -11,7 +11,7 @@ cd Nullbrain-backend/backend
 source .venv/Scripts/activate
 
 bash
-source .venv/bin/activate
+source .venv/Scripts/activate
 ```
 ```bash
 source .venv/Scripts/activate
@@ -35,6 +35,15 @@ pip install opencv-python
 ```
 opencv
 
+```cmd
+pip install mediapipe opencv-python
+```
+
+
+한번에 설치 : 
+```
+pip install -r requirements.txt
+```
 
 
 ### 서버 실행
