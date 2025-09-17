@@ -54,3 +54,32 @@ def get_squat_feedback(landmarks):
         pass
         
     return feedback, knee_angle
+
+def get_pushup_feedback(landmarks):
+    """
+    랜드마크 데이터를 기반으로 푸시업 자세에 대한 피드백과
+    팔꿈치 각도를 반환하는 함수.
+    """
+    mp_pose = mp.solutions.pose.PoseLandmark
+    feedback = "자세를 잡아주세요"
+    elbow_angle = None
+    
+    try:
+        # 오른쪽 어깨, 팔꿈치, 손목의 2D 좌표 추출
+        shoulder = [landmarks[mp_pose.RIGHT_SHOULDER.value].x, landmarks[mp_pose.RIGHT_SHOULDER.value].y]
+        elbow = [landmarks[mp_pose.RIGHT_ELBOW.value].x, landmarks[mp_pose.RIGHT_ELBOW.value].y]
+        wrist = [landmarks[mp_pose.RIGHT_WRIST.value].x, landmarks[mp_pose.RIGHT_WRIST.value].y]
+
+        # 팔꿈치 각도 계산
+        elbow_angle = calculate_angle(shoulder, elbow, wrist)
+        
+        # 각도에 따른 피드백 생성
+        if elbow_angle > 160:
+            feedback = "내려가세요"
+        elif elbow_angle < 90:
+            feedback = "자세 좋습니다!"
+            
+    except:
+        pass
+        
+    return feedback, elbow_angle

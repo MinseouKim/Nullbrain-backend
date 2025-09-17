@@ -37,6 +37,11 @@ pip install mediapipe opencv-python
 ```
 
 
+한번에 설치 : 
+```
+pip install -r requirements.txt
+```
+
 
 ### 서버 실행
 ```cmd
