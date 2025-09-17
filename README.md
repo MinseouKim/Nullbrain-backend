@@ -2,7 +2,6 @@
 
 [생성]
 ```cmd
-python -m venv .venv
 py -3.11 -m venv .venv
 ```
 
@@ -12,7 +11,7 @@ cd Nullbrain-backend/backend
 source .venv/Scripts/activate
 
 bash
-source .venv/bin/activate
+source .venv/Scripts/activate
 ```
 
 [가상환경 비활성화]

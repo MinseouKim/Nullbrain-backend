@@ -3,15 +3,18 @@
 import cv2
 from fastapi import APIRouter, WebSocket
 import asyncio
-from app.ml.pipeline import PoseEstimator      # [!code ++]
-from app.ml.feedback import get_squat_feedback # [!code ++]
+from app.ml.pipeline import PoseEstimator
+from app.ml.feedback import get_squat_feedback
+import numpy as np # [!code ++]
+from PIL import ImageFont, ImageDraw, Image # [!code ++]
 
 router = APIRouter()
 camera = None
-# face_cascade = cv2.CascadeClassifier(...) # [!code --] # 얼굴 인식 코드 삭제
+pose_estimator = PoseEstimator()
 
-# PoseEstimator 클래스의 인스턴스를 생성합니다.
-pose_estimator = PoseEstimator() # [!code ++]
+# --- 한글 폰트 경로 설정 --- # [!code focus]
+font_path = "app/static/NanumGothic.ttf" # [!code ++]
+font = ImageFont.truetype(font_path, 35) # [!code ++]
 
 def get_camera():
     global camera
@@ -25,35 +28,33 @@ async def websocket_endpoint(websocket: WebSocket):
     camera = get_camera()
     try:
         while True:
-            if not camera.isOpened():
-                break
-
             success, frame = camera.read()
-            if not success:
-                break
+            if not success: break
             
-            # --- AI 분석 및 시각화 (새 코드로 교체) ---
-            # 1. pipeline.py의 PoseEstimator로 관절 탐지
-            processed_frame, landmarks = pose_estimator.process_frame(frame) # [!code ++]
+            processed_frame, landmarks = pose_estimator.process_frame(frame)
 
-            # 2. 관절이 탐지되었을 경우 feedback.py로 자세 분석
-            if landmarks: # [!code ++]
-                feedback, angle = get_squat_feedback(landmarks) # [!code ++]
+            if landmarks:
+                feedback, angle = get_squat_feedback(landmarks)
                 
-                # 3. 화면에 피드백과 각도 텍스트 추가
-                cv2.putText(processed_frame, f"Knee Angle: {int(angle)}" if angle else "No Angle",
-                            (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2, cv2.LINE_AA) # [!code ++]
-                cv2.putText(processed_frame, f"Feedback: {feedback}",
-                            (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2, cv2.LINE_AA) # [!code ++]
-            # ---------------------------------------------
+                # --- Pillow를 사용해 한글 텍스트 그리기 (수정된 부분) --- # [!code focus]
+                # 1. OpenCV 프레임(BGR)을 Pillow 이미지(RGB)로 변환
+                img_pil = Image.fromarray(cv2.cvtColor(processed_frame, cv2.COLOR_BGR2RGB)) # [!code ++]
+                draw = ImageDraw.Draw(img_pil) # [!code ++]
 
-            # 관절과 피드백이 그려진 이미지를 JPEG로 인코딩
-            ret, buffer = cv2.imencode('.jpg', processed_frame) # [!code focus]
+                # 2. 텍스트 그리기
+                angle_text = f"무릎 각도: {int(angle)}" if angle else "각도 측정 불가" # [!code ++]
+                feedback_text = f"피드백: {feedback}" # [!code ++]
+                draw.text((10, 20), angle_text, font=font, fill=(0, 255, 0)) # [!code ++]
+                draw.text((10, 60), feedback_text, font=font, fill=(0, 255, 0)) # [!code ++]
+
+                # 3. 다시 OpenCV 프레임으로 변환
+                processed_frame = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR) # [!code ++]
+                # ------------------------------------------------------------------ #
+
+            ret, buffer = cv2.imencode('.jpg', processed_frame)
             frame_bytes = buffer.tobytes()
-
-            # 웹소켓을 통해 브라우저로 전송
             await websocket.send_bytes(frame_bytes)
-            await asyncio.sleep(0.03) # 프레임 속도 조절
+            await asyncio.sleep(0.03)
 
     except Exception as e:
         print(f"WebSocket 오류 발생: {e}")
