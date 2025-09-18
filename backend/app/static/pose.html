@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <title>Pose MVP - Squat Counter</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    html,body { margin:0; padding:0; background:#0b0b0c; color:#eee; font-family:system-ui, -apple-system, Segoe UI, Roboto; }
+    .wrap { max-width: 960px; margin: 24px auto; padding: 12px; }
+    .toolbar { display:flex; gap:8px; align-items:center; margin-bottom:12px; flex-wrap:wrap; }
+    button { padding:10px 14px; border-radius:10px; border:1px solid #444; background:#1c1f24; color:#eee; cursor:pointer; }
+    button:disabled { opacity:.6; cursor:not-allowed; }
+    select, input { background:#0f1216; color:#eee; border:1px solid #444; border-radius:8px; padding:8px 10px; }
+    #stage { position:relative; width:100%; aspect-ratio:16/9; background:#111; border-radius:16px; overflow:hidden; }
+    video { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; transform: scaleX(-1); } /* 거울모드 */
+    canvas { position:absolute; inset:0; }
+    .hud { position:absolute; top:10px; left:10px; background:rgba(0,0,0,.45); padding:8px 12px; border-radius:10px; font-size:14px; }
+    .badge { display:inline-block; padding:4px 8px; border-radius:12px; background:#1f3b2f; margin-right:6px; }
+    .status { font-weight:700; }
+  </style>
+  <!-- TFJS + Pose Detection (CDN) -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection@3.6.1"></script>
+</head>
+<body>
+<div class="wrap">
+  <h2>노트북 웹캠 자세 교정 MVP</h2>
+  <div class="toolbar">
+    <button id="btnStart">웹캠 시작</button>
+    <button id="btnStop" disabled>중지</button>
+    <label>운동:
+      <select id="exercise">
+        <option value="squat" selected>스쿼트</option>
+        <option value="bicep">덤벨 컬(오른팔)</option>
+      </select>
+    </label>
+    <label>난이도(각도 임계):
+      <input id="depth" type="number" min="60" max="120" value="90" style="width:70px" />°
+    </label>
+    <span id="msg"></span>
+  </div>
+
+  <div id="stage">
+    <video id="video" autoplay playsinline muted></video>
+    <canvas id="canvas"></canvas>
+    <div class="hud">
+      <span class="badge">FPS <span id="fps">0</span></span>
+      <span class="badge">REPS <span id="reps">0</span></span>
+      <span class="status" id="status">대기</span>
+    </div>
+  </div>
+</div>
+
+<script>
+(async () => {
+  const video = document.getElementById('video');
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d');
+  const btnStart = document.getElementById('btnStart');
+  const btnStop = document.getElementById('btnStop');
+  const repsEl = document.getElementById('reps');
+  const statusEl = document.getElementById('status');
+  const fpsEl = document.getElementById('fps');
+  const msgEl = document.getElementById('msg');
+  const selectEx = document.getElementById('exercise');
+  const depthEl = document.getElementById('depth');
+
+  let stream = null, detector = null, rafId = null, running = false;
+  let lastTs = performance.now(), fps = 0;
+
+  // 포즈 검출기 준비 (MoveNet)
+  await tf.setBackend('webgl');
+  detector = await poseDetection.createDetector(
+    poseDetection.SupportedModels.MoveNet,
+    { modelType: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING }
+  );
+
+  // 상태기계(스쿼트/컬)
+  let state = 'up'; // 'up'|'down'
+  let reps = 0;
+
+  function angle(a,b,c) {
+    const ab = {x:a.x-b.x, y:a.y-b.y};
+    const cb = {x:c.x-b.x, y:c.y-b.y};
+    const dot = ab.x*cb.x + ab.y*cb.y;
+    const mag = Math.hypot(ab.x,ab.y) * Math.hypot(cb.x,cb.y) + 1e-9;
+    return Math.acos(Math.min(Math.max(dot/mag, -1), 1)) * 180/Math.PI;
+  }
+
+  function kp(obj, name) {
+    const k = obj.keypoints.find(k=>k.name===name || k.part===name);
+    return k && k.score>0.3 ? {x:k.x, y:k.y, score:k.score} : null;
+  }
+
+  function drawSkeleton(kps) {
+    ctx.lineWidth = 3; ctx.strokeStyle = '#00e0ff'; ctx.fillStyle = '#ffcc00';
+    const pairs = [
+      ['left_shoulder','left_elbow'],['left_elbow','left_wrist'],
+      ['right_shoulder','right_elbow'],['right_elbow','right_wrist'],
+      ['left_shoulder','left_hip'],['right_shoulder','right_hip'],
+      ['left_hip','left_knee'],['left_knee','left_ankle'],
+      ['right_hip','right_knee'],['right_knee','right_ankle']
+    ];
+    const dict = {}; kps.forEach(k=>{ if(k.score>0.3) dict[k.name||k.part]=k; });
+    pairs.forEach(([a,b])=>{
+      const A=dict[a], B=dict[b];
+      if(A&&B){ ctx.beginPath(); ctx.moveTo(A.x,A.y); ctx.lineTo(B.x,B.y); ctx.stroke(); }
+    });
+    kps.forEach(k=>{ if(k.score>0.4){ ctx.beginPath(); ctx.arc(k.x,k.y,4,0,Math.PI*2); ctx.fill(); }});
+  }
+
+  async function loop() {
+    if(!running) return;
+    const now = performance.now();
+    const dt = now - lastTs;
+    if (dt > 250) lastTs = now; // 막혔을 때 초기화
+    // 추정
+    const poses = await detector.estimatePoses(video,{flipHorizontal:true});
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+
+    if (poses && poses[0]) {
+      const p = poses[0];
+      drawSkeleton(p.keypoints);
+
+      const ex = selectEx.value;
+      const depth = Number(depthEl.value)||90;
+
+      if (ex === 'squat') {
+        // 왼쪽 무릎 각도로 단순 카운트
+        const hip = kp(p,'left_hip'), knee=kp(p,'left_knee'), ankle=kp(p,'left_ankle');
+        if (hip && knee && ankle) {
+          const kneeAngle = angle(hip, knee, ankle);
+          // 상태 전환: up->down(깊이 도달), down->up(완전 기립)
+          if (state==='up' && kneeAngle < depth) { state='down'; statusEl.textContent='DOWN'; }
+          if (state==='down' && kneeAngle > 160) { state='up'; reps++; repsEl.textContent=reps; statusEl.textContent='UP'; }
+          // 각도 표시
+          ctx.fillStyle='#fff';
+          ctx.font='16px system-ui';
+          ctx.fillText(`Knee: ${kneeAngle.toFixed(0)}°`, knee.x+8, knee.y-8);
+        }
+      } else if (ex === 'bicep') {
+        // 오른팔 팔꿈치 각도
+        const sh=kp(p,'right_shoulder'), el=kp(p,'right_elbow'), wr=kp(p,'right_wrist');
+        if (sh && el && wr) {
+          const elbow = angle(sh, el, wr);
+          if (state==='up' && elbow < 60) { state='down'; statusEl.textContent='CURL'; }
+          if (state==='down' && elbow > 150) { state='up'; reps++; repsEl.textContent=reps; statusEl.textContent='EXTEND'; }
+          ctx.fillStyle='#fff'; ctx.font='16px system-ui';
+          ctx.fillText(`Elbow: ${elbow.toFixed(0)}°`, el.x+8, el.y-8);
+        }
+      }
+    }
+
+    // FPS
+    const t = performance.now();
+    fps = 1000 / Math.max(1, t - lastTs);
+    lastTs = t;
+    fpsEl.textContent = Math.round(fps);
+    rafId = requestAnimationFrame(loop);
+  }
+
+  async function start() {
+    btnStart.disabled = true; btnStop.disabled = false; msgEl.textContent='';
+    stream = await navigator.mediaDevices.getUserMedia({ video: { width:1280, height:720 }, audio:false });
+    video.srcObject = stream;
+    await video.play();
+    running = true;
+    loop();
+  }
+
+  function stop() {
+    running = false; cancelAnimationFrame(rafId);
+    if (stream) { stream.getTracks().forEach(t=>t.stop()); }
+    btnStart.disabled = false; btnStop.disabled = true;
+    statusEl.textContent='대기';
+  }
+
+  btnStart.onclick = start;
+  btnStop.onclick = stop;
+
+  // 권한 안내
+  if (!navigator.mediaDevices?.getUserMedia) {
+    msgEl.textContent = '이 브라우저는 카메라를 지원하지 않습니다.';
+  }
+})();
+</script>
+</body>
+</html>

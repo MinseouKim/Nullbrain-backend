@@ -1,7 +1,8 @@
 # backend/app/api/ws.py
+import asyncio
+
 import cv2
 from fastapi import APIRouter, WebSocket
-import asyncio
 
 router = APIRouter()
 camera = None
