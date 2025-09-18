@@ -36,7 +36,13 @@ opencv
 pip install mediapipe opencv-python
 ```
 
+[새로운 패키지 설치 했을 때]
+```
+pip freeze > requirements.txt
+```
 
+
+[이거만 하면 됨]
 한번에 설치 : 
 ```
 pip install -r requirements.txt
@@ -44,8 +50,9 @@ pip install -r requirements.txt
 
 
 ### 서버 실행
+[가상환경 실행 후]
 ```cmd
-uvicorn app.main:app --reload
+python -m uvicorn app.main:app --reload
 ```
 
 app.main:app → app 폴더 안 main.py에 있는 app 객체를 가리킵니다.

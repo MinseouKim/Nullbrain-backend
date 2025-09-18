@@ -22,7 +22,7 @@
             if (ws && ws.readyState === WebSocket.OPEN) { return; }
             
             // 운동 이름에 맞는 웹소켓 주소로 접속
-            const wsURL = `ws://localhost:8000/ws/${exercise}`; // [!code focus]
+            const wsURL = `ws://localhost:8000/ws/${exercise}`; // [!code focus]    
             console.log("Connecting to:", wsURL); // [!code ++]
             ws = new WebSocket(wsURL); // [!code focus]
 
