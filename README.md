@@ -14,7 +14,7 @@ bash
 source .venv/Scripts/activate
 ```
 ```bash
-source .venv/Scripts/activate
+source .venv/bin/activate
 ```
 
 [가상환경 비활성화]
