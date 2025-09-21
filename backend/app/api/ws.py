@@ -1,49 +1,36 @@
-# backend/app/api/ws.py
 import asyncio
-
 import cv2
 from fastapi import APIRouter, WebSocket
 
 router = APIRouter()
-camera = None
-face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+_cam = None
 
-def get_camera():
-    global camera
-    if camera is None or not camera.isOpened():
-        camera = cv2.VideoCapture(0)
-    return camera
+def get_cam():
+    global _cam
+    if _cam is None or not _cam.isOpened():
+        _cam = cv2.VideoCapture(0, cv2.CAP_V4L2)
+        _cam.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+        _cam.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+        _cam.set(cv2.CAP_PROP_FPS, 30)
+        _cam.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+    return _cam
 
 @router.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
+async def ws_jpeg(websocket: WebSocket):
     await websocket.accept()
-    camera = get_camera()
+    cam = get_cam()
     try:
         while True:
-            if not camera.isOpened():
+            if not cam.isOpened():
                 break
-
-            success, frame = camera.read()
-            if not success:
+            ok, frame = cam.read()
+            if not ok:
                 break
-            
-            # --- AI 분석 및 시각화 ---
-            gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            faces = face_cascade.detectMultiScale(gray_frame, 1.1, 4)
-
-            for (x, y, w, h) in faces:
-                cv2.rectangle(frame, (x, y), (x+w, y+h), (255, 0, 0), 2)
-            # ------------------------
-
-            ret, buffer = cv2.imencode('.jpg', frame)
-            frame_bytes = buffer.tobytes()
-
-            await websocket.send_bytes(frame_bytes)
-            await asyncio.sleep(0.03)
-
-    except asyncio.CancelledError:
-        print("WebSocket 연결이 종료되었습니다.")
-    finally:
-        if camera and camera.isOpened():
-            camera.release()
-            print("웹캠 자원이 해제되었습니다.")
+            # 원한다면 여기서 가이드라인(중앙선/프레이밍 박스)도 그릴 수 있음
+            ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+            if not ok:
+                continue
+            await websocket.send_bytes(buf.tobytes())
+            await asyncio.sleep(0.03)  # ~33fps
+    except Exception:
+        pass

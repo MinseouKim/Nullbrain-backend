@@ -1,0 +1,68 @@
+# --- Python 기본 ---
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyc
+*.so
+*.pyd
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.wheelhouse/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.dmypy.json
+.pyre/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.cache/
+.ipynb_checkpoints/
+
+# 가상환경
+.venv/
+venv/
+env/
+ENV/
+.python-version  # pyenv/poetry 등
+
+# FastAPI/UVicorn 런타임 산출물
+*.log
+*.pid
+
+# 데이터/업로드(필요 시 경로 맞게 수정)
+data/
+datasets/
+uploads/
+media/
+tmp/
+temp/
+
+# 환경변수 파일(예시는 추적)
+.env
+.env.*
+!.env.example
+
+# --- Node/React (프론트 있을 때) ---
+node_modules/
+npm-debug.log*
+yarn-error.log*
+.pnpm-store/
+.next/
+.out/
+build/
+
+# --- IDE/OS ---
+.vscode/
+.idea/
+*.iml
+.DS_Store
+Thumbs.db
+
+# --- Docker ---
+*.local.yml
+docker-compose.override.yml
