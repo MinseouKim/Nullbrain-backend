@@ -53,7 +53,7 @@ async def websocket_endpoint(websocket: WebSocket, exercise_name: str):
                 feedback_text = f"피드백: {feedback}"
                 draw.text((10, 20), angle_text, font=font, fill=(0, 255, 0))
                 draw.text((10, 60), feedback_text, font=font, fill=(0, 255, 0))
-                processed_frame = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB_BGR)
+                processed_frame = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR) # 2를 추가
 
             ret, buffer = cv2.imencode('.jpg', processed_frame)
             frame_bytes = buffer.tobytes()

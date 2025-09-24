@@ -76,6 +76,7 @@ app.main:app → app 폴더 안 main.py에 있는 app 객체를 가리킵니다.
 
 푸시업 확인 : http://127.0.0.1:8000/pushup
 
+[다른 컴퓨터끼리 실행 시 명령어]
 로컬실행 : python -m uvicorn app.main:app --reload --host 0.0.0.0
 
-[IPv4 주소 찾기]
+[프론트에서 사용할 백엔드 컴퓨터 IPv4 주소 찾기]
