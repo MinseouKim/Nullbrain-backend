@@ -1,58 +1,90 @@
 <!DOCTYPE html>
 <html>
-<head>
-    <title>AI 홈 트레이너</title>
-    <link rel="stylesheet" href="/static/index_styles.css">
-</head>
-<body>
-    <h1>AI 홈 트레이너</h1>
-    <button id="toggleButton">웹캠 켜기</button>
-    <br><br>
-    <img id="videoStream" width="640" height="480">
+  <head>
+    <title>AI 홈 트레이너 (Test)</title>
+    <link rel="stylesheet" href="/static/index_styles.css" />
+  </head>
+  <body>
+    <h1>AI 홈 트레이너 (Test)</h1>
+
+    <button id="connectButton">웹캠 켜기</button>
+    <button id="feedbackButton" style="display: none">AI 피드백 시작</button>
+
+    <br /><br />
+    <img id="videoStream" width="640" height="480" />
 
     <script>
-        let ws;
-        const toggleButton = document.getElementById('toggleButton');
-        const videoStream = document.getElementById('videoStream');
-        
-        // main.py에서 이 부분을 동적으로 교체해줍니다.
-        const exercise = "EXERCISE_PLACEHOLDER"; // [!code focus]
+      let ws;
+      const connectButton = document.getElementById("connectButton");
+      const feedbackButton = document.getElementById("feedbackButton"); // [!code ++]
+      const videoStream = document.getElementById("videoStream");
 
-        function connectWebSocket() {
-            if (ws && ws.readyState === WebSocket.OPEN) { return; }
-            
-            // 운동 이름에 맞는 웹소켓 주소로 접속
-            const wsURL = `ws://localhost:8000/ws/${exercise}`; // [!code focus]    
-            console.log("Connecting to:", wsURL); // [!code ++]
-            ws = new WebSocket(wsURL); // [!code focus]
+      // main.py가 이 부분을 운동 이름으로 교체해줍니다.
+      const exercise = "EXERCISE_PLACEHOLDER";
+      let isFeedbackRunning = false; // [!code ++]
 
-            ws.onmessage = (event) => {
-                const blob = new Blob([event.data], { type: 'image/jpeg' });
-                const url = URL.createObjectURL(blob);
-                videoStream.src = url;
-            };
-            ws.onopen = () => {
-                console.log("WebSocket 연결 성공");
-                toggleButton.textContent = "웹캠 끄기";
-            };
-            ws.onclose = () => {
-                console.log("WebSocket 연결 종료");
-                toggleButton.textContent = "웹캠 켜기";
-                videoStream.src = "";
-            };
+      function connectWebSocket() {
+        if (ws && ws.readyState === WebSocket.OPEN) return;
+
+        const wsURL = `ws://localhost:8000/ws/${exercise}`;
+        ws = new WebSocket(wsURL);
+
+        // --- 👇 onmessage 핸들러 수정: JSON 데이터 처리 ---
+        ws.onmessage = (event) => {
+          const data = JSON.parse(event.data);
+          if (data.image) {
+            // Base64 이미지 데이터를 img 태그의 src에 직접 설정
+            videoStream.src = `data:image/jpeg;base64,${data.image}`;
+          }
+        };
+
+        ws.onopen = () => {
+          console.log("WebSocket 연결 성공");
+          connectButton.textContent = "웹캠 끄기";
+          feedbackButton.style.display = "inline-block"; // [!code ++] # 연결 성공 시 피드백 버튼 보이기
+          feedbackButton.textContent = "AI 피드백 시작"; // [!code ++]
+        };
+        ws.onclose = () => {
+          console.log("WebSocket 연결 종료");
+          connectButton.textContent = "웹캠 켜기";
+          feedbackButton.style.display = "none"; // [!code ++] # 연결 종료 시 피드백 버튼 숨기기
+          isFeedbackRunning = false; // [!code ++]
+          videoStream.src = "";
+        };
+      }
+
+      function disconnectWebSocket() {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.close();
         }
+      }
 
-        function disconnectWebSocket() {
-            if (ws && ws.readyState === WebSocket.OPEN) { ws.close(); }
+      // --- 피드백 시작/중지 함수 추가 ---
+      function toggleFeedback() {
+        // [!code ++]
+        if (!ws || ws.readyState !== WebSocket.OPEN) return; // [!code ++]
+
+        isFeedbackRunning = !isFeedbackRunning; // [!code ++]
+        const action = isFeedbackRunning ? "start_feedback" : "stop_feedback"; // [!code ++]
+
+        // 백엔드로 JSON 메시지 전송
+        ws.send(JSON.stringify({ action: action })); // [!code ++]
+
+        feedbackButton.textContent = isFeedbackRunning
+          ? "AI 피드백 중지"
+          : "AI 피드백 시작"; // [!code ++]
+        console.log(`Sent action: ${action}`); // [!code ++]
+      } // [!code ++]
+
+      connectButton.addEventListener("click", () => {
+        if (connectButton.textContent === "웹캠 켜기") {
+          connectWebSocket();
+        } else {
+          disconnectWebSocket();
         }
+      });
 
-        toggleButton.addEventListener('click', () => {
-            if (toggleButton.textContent === "웹캠 켜기") {
-                connectWebSocket();
-            } else {
-                disconnectWebSocket();
-            }
-        });
+      feedbackButton.addEventListener("click", toggleFeedback); // [!code ++]
     </script>
-</body>
+  </body>
 </html>

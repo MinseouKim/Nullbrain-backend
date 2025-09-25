@@ -1,10 +1,13 @@
 # backend/app/main.py
-
+from dotenv import load_dotenv
+load_dotenv() # <-- FastAPI 앱이 시작되기 전에 .env 파일을 먼저 읽습니다.
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware  # [!code ++]
 from app.api import rest, ws
+
+
 
 app = FastAPI(title="Motion Backend")
 
