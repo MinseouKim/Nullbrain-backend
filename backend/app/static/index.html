@@ -1,90 +1,120 @@
 <!DOCTYPE html>
 <html>
   <head>
-    <title>AI 홈 트레이너 (Test)</title>
+    <title>AI 홈 트레이너 (Frontend Processing)</title>
     <link rel="stylesheet" href="/static/index_styles.css" />
+    <script
+      src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"
+      crossorigin="anonymous"
+    ></script>
+    <script
+      src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"
+      crossorigin="anonymous"
+    ></script>
+    <script
+      src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"
+      crossorigin="anonymous"
+    ></script>
   </head>
   <body>
-    <h1>AI 홈 트레이너 (Test)</h1>
+    <h1>AI 홈 트레이너 (Frontend Processing)</h1>
+    <button id="connectButton">운동 시작</button>
+    <p>AI 피드백: <span id="feedbackText">AI 코칭 대기 중...</span></p>
 
-    <button id="connectButton">웹캠 켜기</button>
-    <button id="feedbackButton" style="display: none">AI 피드백 시작</button>
-
-    <br /><br />
-    <img id="videoStream" width="640" height="480" />
+    <div style="position: relative">
+      <video id="videoElement" style="display: none"></video>
+      <canvas id="canvasElement" width="640px" height="480px"></canvas>
+    </div>
 
     <script>
-      let ws;
       const connectButton = document.getElementById("connectButton");
-      const feedbackButton = document.getElementById("feedbackButton"); // [!code ++]
-      const videoStream = document.getElementById("videoStream");
+      const feedbackText = document.getElementById("feedbackText");
+      const videoElement = document.getElementById("videoElement");
+      const canvasElement = document.getElementById("canvasElement");
+      const canvasCtx = canvasElement.getContext("2d");
 
-      // main.py가 이 부분을 운동 이름으로 교체해줍니다.
-      const exercise = "EXERCISE_PLACEHOLDER";
-      let isFeedbackRunning = false; // [!code ++]
+      let ws;
+      const exercise = "squat"; // 테스트할 운동
 
-      function connectWebSocket() {
-        if (ws && ws.readyState === WebSocket.OPEN) return;
+      // MediaPipe Pose 결과를 처리하는 콜백 함수
+      function onResults(results) {
+        // 1. 캔버스에 웹캠 영상과 관절 그리기
+        canvasCtx.save();
+        canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+        canvasCtx.drawImage(
+          results.image,
+          0,
+          0,
+          canvasElement.width,
+          canvasElement.height
+        );
+        if (results.poseLandmarks) {
+          drawConnectors(canvasCtx, results.poseLandmarks, POSE_CONNECTIONS, {
+            color: "#00FF00",
+            lineWidth: 4,
+          });
+          drawLandmarks(canvasCtx, results.poseLandmarks, {
+            color: "#FF0000",
+            lineWidth: 2,
+          });
+        }
+        canvasCtx.restore();
 
-        const wsURL = `ws://localhost:8000/ws/${exercise}`;
-        ws = new WebSocket(wsURL);
-
-        // --- 👇 onmessage 핸들러 수정: JSON 데이터 처리 ---
-        ws.onmessage = (event) => {
-          const data = JSON.parse(event.data);
-          if (data.image) {
-            // Base64 이미지 데이터를 img 태그의 src에 직접 설정
-            videoStream.src = `data:image/jpeg;base64,${data.image}`;
-          }
-        };
-
-        ws.onopen = () => {
-          console.log("WebSocket 연결 성공");
-          connectButton.textContent = "웹캠 끄기";
-          feedbackButton.style.display = "inline-block"; // [!code ++] # 연결 성공 시 피드백 버튼 보이기
-          feedbackButton.textContent = "AI 피드백 시작"; // [!code ++]
-        };
-        ws.onclose = () => {
-          console.log("WebSocket 연결 종료");
-          connectButton.textContent = "웹캠 켜기";
-          feedbackButton.style.display = "none"; // [!code ++] # 연결 종료 시 피드백 버튼 숨기기
-          isFeedbackRunning = false; // [!code ++]
-          videoStream.src = "";
-        };
-      }
-
-      function disconnectWebSocket() {
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.close();
+        // 2. 백엔드로 관절 좌표 데이터(JSON) 전송
+        if (results.poseLandmarks && ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify(results.poseLandmarks));
         }
       }
 
-      // --- 피드백 시작/중지 함수 추가 ---
-      function toggleFeedback() {
-        // [!code ++]
-        if (!ws || ws.readyState !== WebSocket.OPEN) return; // [!code ++]
+      // MediaPipe Pose 객체 초기화
+      const pose = new Pose({
+        locateFile: (file) =>
+          `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`,
+      });
+      pose.setOptions({
+        modelComplexity: 1,
+        smoothLandmarks: true,
+        minDetectionConfidence: 0.5,
+        minTrackingConfidence: 0.5,
+      });
+      pose.onResults(onResults);
 
-        isFeedbackRunning = !isFeedbackRunning; // [!code ++]
-        const action = isFeedbackRunning ? "start_feedback" : "stop_feedback"; // [!code ++]
-
-        // 백엔드로 JSON 메시지 전송
-        ws.send(JSON.stringify({ action: action })); // [!code ++]
-
-        feedbackButton.textContent = isFeedbackRunning
-          ? "AI 피드백 중지"
-          : "AI 피드백 시작"; // [!code ++]
-        console.log(`Sent action: ${action}`); // [!code ++]
-      } // [!code ++]
-
-      connectButton.addEventListener("click", () => {
-        if (connectButton.textContent === "웹캠 켜기") {
-          connectWebSocket();
-        } else {
-          disconnectWebSocket();
-        }
+      // 웹캠 및 MediaPipe 실행 로직
+      const camera = new Camera(videoElement, {
+        onFrame: async () => {
+          await pose.send({ image: videoElement });
+        },
+        width: 640,
+        height: 480,
       });
 
-      feedbackButton.addEventListener("click", toggleFeedback); // [!code ++]
+      // 버튼 클릭 이벤트
+      connectButton.addEventListener("click", () => {
+        if (connectButton.textContent === "운동 시작") {
+          // 1. 웹소켓 연결
+          ws = new WebSocket(`ws://localhost:8000/ws/${exercise}`);
+          ws.onopen = () => {
+            console.log("백엔드 연결 성공");
+            connectButton.textContent = "운동 종료";
+          };
+          ws.onmessage = (event) => {
+            // 2. 백엔드로부터 받은 피드백을 화면에 표시
+            const data = JSON.parse(event.data);
+            feedbackText.textContent = data.feedback || "...";
+          };
+          ws.onclose = () => {
+            console.log("백엔드 연결 종료");
+            camera.stop();
+            connectButton.textContent = "운동 시작";
+            feedbackText.textContent = "AI 코칭 대기 중...";
+          };
+
+          // 3. 웹캠 시작
+          camera.start();
+        } else {
+          if (ws) ws.close();
+        }
+      });
     </script>
   </body>
 </html>
