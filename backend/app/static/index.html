@@ -36,9 +36,9 @@
       let ws;
       const exercise = "squat"; // 테스트할 운동
 
-      // MediaPipe Pose 결과를 처리하는 콜백 함수
+      // --- 👇 onResults 함수가 수정되었습니다 --- // [!code focus:60]
       function onResults(results) {
-        // 1. 캔버스에 웹캠 영상과 관절 그리기
+        // 1. 캔버스 준비
         canvasCtx.save();
         canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
         canvasCtx.drawImage(
@@ -48,7 +48,25 @@
           canvasElement.width,
           canvasElement.height
         );
+
+        // 2. 전신 인식 필터링 로직
+        const visibilityThreshold = 0.7;
+        let isFullBodyVisible = false;
+
         if (results.poseLandmarks) {
+          const leftAnkle = results.poseLandmarks[27];
+          const rightAnkle = results.poseLandmarks[28];
+          if (
+            leftAnkle.visibility > visibilityThreshold &&
+            rightAnkle.visibility > visibilityThreshold
+          ) {
+            isFullBodyVisible = true;
+          }
+        }
+
+        // 3. 필터링 결과에 따라 동작 결정
+        if (isFullBodyVisible) {
+          // 전신이 보일 때: 관절 그리고 데이터 전송
           drawConnectors(canvasCtx, results.poseLandmarks, POSE_CONNECTIONS, {
             color: "#00FF00",
             lineWidth: 4,
@@ -57,16 +75,27 @@
             color: "#FF0000",
             lineWidth: 2,
           });
-        }
-        canvasCtx.restore();
 
-        // 2. 백엔드로 관절 좌표 데이터(JSON) 전송
-        if (results.poseLandmarks && ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify(results.poseLandmarks));
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify(results.poseLandmarks));
+          }
+        } else {
+          // 전신이 아닐 때: 안내 메시지 표시
+          canvasCtx.font = "bold 30px sans-serif";
+          canvasCtx.fillStyle = "white";
+          canvasCtx.textAlign = "center";
+          canvasCtx.fillText(
+            "카메라에 전신이 나오도록 뒤로 물러나세요.",
+            canvasElement.width / 2,
+            canvasElement.height / 2
+          );
         }
+
+        canvasCtx.restore();
       }
 
-      // MediaPipe Pose 객체 초기화
+      // --- (이하 코드는 동일합니다) ---
+
       const pose = new Pose({
         locateFile: (file) =>
           `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`,
@@ -74,12 +103,11 @@
       pose.setOptions({
         modelComplexity: 1,
         smoothLandmarks: true,
-        minDetectionConfidence: 0.5,
-        minTrackingConfidence: 0.5,
+        minDetectionConfidence: 0.2,
+        minTrackingConfidence: 0.2,
       });
       pose.onResults(onResults);
 
-      // 웹캠 및 MediaPipe 실행 로직
       const camera = new Camera(videoElement, {
         onFrame: async () => {
           await pose.send({ image: videoElement });
@@ -88,17 +116,14 @@
         height: 480,
       });
 
-      // 버튼 클릭 이벤트
       connectButton.addEventListener("click", () => {
         if (connectButton.textContent === "운동 시작") {
-          // 1. 웹소켓 연결
           ws = new WebSocket(`ws://localhost:8000/ws/${exercise}`);
           ws.onopen = () => {
             console.log("백엔드 연결 성공");
             connectButton.textContent = "운동 종료";
           };
           ws.onmessage = (event) => {
-            // 2. 백엔드로부터 받은 피드백을 화면에 표시
             const data = JSON.parse(event.data);
             feedbackText.textContent = data.feedback || "...";
           };
@@ -108,8 +133,6 @@
             connectButton.textContent = "운동 시작";
             feedbackText.textContent = "AI 코칭 대기 중...";
           };
-
-          // 3. 웹캠 시작
           camera.start();
         } else {
           if (ws) ws.close();
