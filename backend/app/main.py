@@ -1,7 +1,7 @@
 # backend/app/main.py
 from dotenv import load_dotenv
 load_dotenv() # <-- FastAPI 앱이 시작되기 전에 .env 파일을 먼저 읽습니다.
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware  # [!code ++]
@@ -10,6 +10,14 @@ from app.api import rest, ws
 
 
 app = FastAPI(title="Motion Backend")
+
+@app.middleware("http")
+async def add_coop_coep_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
+    response.headers["Cross-Origin-Embedder-Policy"] = "require-corp"
+    return response
+
 
 # --- CORS 미들웨어 추가 --- # [!code focus]
 origins = [
