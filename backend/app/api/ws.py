@@ -1,67 +1,99 @@
 # backend/app/api/ws.py
 
-import cv2
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect # [!code ++]
-import asyncio
-from app.ml.pipeline import PoseEstimator
-from app.ml.feedback import get_squat_feedback, get_pushup_feedback # [!code focus]
-import numpy as np
-from PIL import ImageFont, ImageDraw, Image
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from app.logic.squat import get_squat_angle
+from app.logic.pushup import get_pushup_angle
+from app.logic.gemini import get_conversational_feedback
+import time
+import mediapipe as mp # 관절 인덱스 번호를 위해 import 합니다.
 
 router = APIRouter()
-camera = None
-pose_estimator = PoseEstimator()
-font_path = "app/static/NanumGothic.ttf"
-font = ImageFont.truetype(font_path, 35)
 
-def get_camera():
-    global camera
-    if camera is None or not camera.isOpened():
-        camera = cv2.VideoCapture(0)
-    return camera
-
-@router.websocket("/ws/{exercise_name}") # [!code focus]
-async def websocket_endpoint(websocket: WebSocket, exercise_name: str): # [!code focus]
+@router.websocket("/ws/{exercise_name}")
+async def websocket_endpoint(websocket: WebSocket, exercise_name: str):
     await websocket.accept()
-    camera = get_camera()
+    
+    rep_counter = 0
+    stage = "up"
+    feedback = "운동을 시작하세요."
+    conversation_history = []
+    last_api_call_time = 0
+    
+    # MediaPipe의 관절 인덱스를 쉽게 사용하기 위해 변수 선언
+    mp_pose = mp.solutions.pose.PoseLandmark
+
     try:
         while True:
-            success, frame = camera.read()
-            if not success: break
+            landmarks_data = await websocket.receive_json()
             
-            processed_frame, landmarks = pose_estimator.process_frame(frame)
+            # --- 👇 1. 스쿼트 관절 가시성 사전 검사 ---
+            if exercise_name == 'squat':
+                visibility_threshold = 0.6 # 가시성 기준값 (0.0 ~ 1.0)
+                try:
+                    # 왼쪽 하체 관절들의 가시성 점수를 확인합니다.
+                    hip_visible = landmarks_data[mp_pose.LEFT_HIP.value]['visibility'] > visibility_threshold
+                    knee_visible = landmarks_data[mp_pose.LEFT_KNEE.value]['visibility'] > visibility_threshold
+                    ankle_visible = landmarks_data[mp_pose.LEFT_ANKLE.value]['visibility'] > visibility_threshold
 
-            if landmarks:
-                feedback = "알 수 없는 운동입니다." # [!code ++]
-                angle = None # [!code ++]
+                    # 세 관절 중 하나라도 잘 보이지 않으면, 안내 메시지를 보내고 이번 프레임 처리를 건너뜁니다.
+                    if not (hip_visible and knee_visible and ankle_visible):
+                        payload = { 
+                            "feedback": "하체 전체가 잘 보이도록 뒤로 물러나세요.", 
+                            "angle": None,
+                            "rep_count": rep_counter
+                        }
+                        await websocket.send_json(payload)
+                        continue # 다음 프레임으로 넘어감
+                except (IndexError, KeyError):
+                    # 프론트에서 불완전한 랜드마크 데이터가 올 경우를 대비한 예외 처리
+                    continue
+            # ------------------------------------
+
+            angle = None
+            if exercise_name == 'squat':
+                angle = get_squat_angle(landmarks_data)
+            elif exercise_name == 'pushup':
+                angle = get_pushup_angle(landmarks_data)
+            
+            previous_stage = stage 
+
+            if angle is not None:
+                if exercise_name == 'squat':
+                    if angle < 100 and stage == 'up':
+                        stage = 'down'
+                        rep_counter += 1
+                    elif angle > 160 and stage == 'down':
+                        stage = 'up'
                 
-                # URL로 받은 운동 이름에 따라 다른 함수 호출
-                if exercise_name == "squat": # [!code ++]
-                    feedback, angle = get_squat_feedback(landmarks) # [!code ++]
-                elif exercise_name == "pushup": # [!code ++]
-                    feedback, angle = get_pushup_feedback(landmarks) # [!code ++]
+                elif exercise_name == 'pushup':
+                    if angle < 90 and stage == 'up':
+                        stage = 'down'
+                        rep_counter += 1
+                    elif angle > 160 and stage == 'down':
+                        stage = 'up'
+
+            current_time = time.time()
+            if (stage != previous_stage or (current_time - last_api_call_time) > 3) and angle is not None:
+                feedback = await get_conversational_feedback(
+                    exercise_name, angle, rep_counter, stage, conversation_history
+                )
                 
-                # Pillow를 사용해 한글 텍스트 그리기
-                img_pil = Image.fromarray(cv2.cvtColor(processed_frame, cv2.COLOR_BGR2RGB))
-                draw = ImageDraw.Draw(img_pil)
+                user_action = f"({exercise_name} 자세, 각도: {int(angle)}, 상태: {stage})"
+                conversation_history.append(f"사용자: {user_action}")
+                conversation_history.append(f"AI 코치: {feedback}") 
+                if len(conversation_history) > 10:
+                    conversation_history = conversation_history[-10:]
+                
+                last_api_call_time = current_time
+            
+            payload = { 
+                "feedback": feedback, 
+                "angle": int(angle) if angle is not None else None,
+                "rep_count": rep_counter
+            }
+            await websocket.send_json(payload)
 
-                angle_text = f"각도: {int(angle)}" if angle else "각도 측정 불가" # [!code focus]
-                feedback_text = f"피드백: {feedback}"
-                draw.text((10, 20), angle_text, font=font, fill=(0, 255, 0))
-                draw.text((10, 60), feedback_text, font=font, fill=(0, 255, 0))
-
-                processed_frame = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
-
-            ret, buffer = cv2.imencode('.jpg', processed_frame)
-            frame_bytes = buffer.tobytes()
-            await websocket.send_bytes(frame_bytes)
-            await asyncio.sleep(0.03)
-
-    except WebSocketDisconnect: # [!code ++]
-        print("클라이언트 연결이 끊어졌습니다.") # [!code ++]
+    except WebSocketDisconnect:
+        print("클라이언트 연결이 끊어졌습니다.")
     except Exception as e:
-        print(f"WebSocket 오류 발생: {e}")
-    finally:
-        if camera and camera.isOpened():
-            camera.release()
-            print("웹캠 자원이 해제되었습니다.")
+        print(f"오류 발생: {e}")

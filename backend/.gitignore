@@ -11,3 +11,9 @@ __pycache__/
 # IDE/Editor specific files
 # VS Code 설정 폴더를 무시합니다. (다른 사람과 공유할 필요 없음)
 .vscode/
+
+# Raw data files (videos)
+videos/
+
+# API Key
+.env
