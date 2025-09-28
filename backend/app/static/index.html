@@ -1,51 +1,322 @@
-<!DOCTYPE html>
-<html>
-<head>
-    <title>웹캠 토글</title>
-</head>
-<link rel="stylesheet" href="index_styles.css"> </head>
+<!doctype html>
+<meta charset="utf-8" />
+<title>웹캠 + 스켈레톤 + 윤곽선 (상세 측정 포함)</title>
+<style>
+  :root { color-scheme: dark; }
+  body{font:14px system-ui;background:#0b0b0c;color:#eaeaea;margin:24px}
+  .row{display:flex;align-items:center;gap:8px}
+  .stage{position:relative;display:inline-block;margin-top:12px}
+  canvas{display:block;image-rendering: crisp-edges}
+  /* 화면 표시 크기(원하면 바꿔도 됨) */
+  #videoCanvas,#overlay{width:960px;height:540px}
+  button{
+    padding:8px 12px;border-radius:10px;border:1px solid #444;
+    background:#1c1f24;color:#eee;cursor:pointer
+  }
+  button:active{transform: translateY(1px)}
+  #poseState{
+    display:inline-block;padding:6px 10px;border-radius:12px;
+    border:1px solid #444;background:#222;color:#ddd;margin-left:8px
+  }
+</style>
 <body>
-    <h1>웹캠 영상</h1>
-    <button id="toggleButton">웹캠 켜기</button>
-    <br><br>
-    <img id="videoStream" width="640" height="480">
+  <h2>웹캠 + 스켈레톤 + 윤곽선</h2>
+  <div class="row">
+    <button id="btn">웹캠 켜기</button>
+    <button id="btnDetail">상세 측정: 끔</button>
+    <span id="poseState">NO PERSON</span>
+  </div>
 
-    <script>
-        let ws;
-        const toggleButton = document.getElementById('toggleButton');
-        const videoStream = document.getElementById('videoStream');
+  <div class="stage">
+    <!-- 비디오 캔버스(영상 비트맵을 그리는 용도) -->
+    <canvas id="videoCanvas" width="960" height="540"></canvas>
+    <!-- 오버레이(스켈레톤/윤곽/인셋/텍스트) -->
+    <canvas id="overlay"     width="960" height="540" style="position:absolute;left:0;top:0;pointer-events:none"></canvas>
+  </div>
 
-        function connectWebSocket() {
-            if (ws && ws.readyState === WebSocket.OPEN) { return; }
-            ws = new WebSocket("ws://localhost:8000/ws");
+<script>
+(() => {
+  const btn = document.getElementById('btn');
+  const btnDetail = document.getElementById('btnDetail');
+  const stateEl = document.getElementById('poseState');
 
-            ws.onmessage = (event) => {
-                const blob = new Blob([event.data], { type: 'image/jpeg' });
-                const url = URL.createObjectURL(blob);
-                videoStream.src = url;
-            };
-            ws.onopen = () => {
-                console.log("WebSocket 연결 성공");
-                toggleButton.textContent = "웹캠 끄기";
-            };
-            ws.onclose = () => {
-                console.log("WebSocket 연결 종료");
-                toggleButton.textContent = "웹캠 켜기";
-                videoStream.src = "";
-            };
-        }
+  const vid = document.getElementById('videoCanvas');
+  const vctx = vid.getContext('2d');
+  const overlay = document.getElementById('overlay');
+  const ctx = overlay.getContext('2d');
 
-        function disconnectWebSocket() {
-            if (ws && ws.readyState === WebSocket.OPEN) { ws.close(); }
-        }
+  let wsImg = null, wsPose = null;
+  let detailMode = false;
 
-        toggleButton.addEventListener('click', () => {
-            if (toggleButton.textContent === "웹캠 켜기") {
-                connectWebSocket();
-            } else {
-                disconnectWebSocket();
-            }
-        });
-    </script>
+  // 스켈레톤 연결 규칙(왼쪽-오른쪽)
+  const pairs = [
+    ['left_shoulder','right_shoulder'], ['left_hip','right_hip'],
+    ['left_shoulder','left_hip'], ['right_shoulder','right_hip'],
+
+    ['left_shoulder','left_elbow'], ['left_elbow','left_wrist'],
+    ['right_shoulder','right_elbow'], ['right_elbow','right_wrist'],
+
+    ['left_hip','left_knee'], ['left_knee','left_ankle'],
+    ['right_hip','right_knee'], ['right_knee','right_ankle'],
+
+    ['left_ankle','left_heel'], ['left_ankle','left_foot_index'],
+    ['right_ankle','right_heel'], ['right_ankle','right_foot_index'],
+
+    ['left_ear','left_shoulder'], ['right_ear','right_shoulder'],
+  ];
+
+  function setBadge(state, score){
+    let text = `NO PERSON (${Math.round((score||0)*100)}%)`, bg='#333', col='#bbb';
+    if(state==='partial'){ text=`UPPER / PARTIAL (${Math.round(score*100)}%)`; bg='#3a3000'; col='#ffd54f'; }
+    if(state==='full'){    text=`FULL BODY (${Math.round(score*100)}%)`;   bg='#0f3a17'; col='#9cffb0'; }
+    stateEl.textContent = text;
+    stateEl.style.background = bg;
+    stateEl.style.color = col;
+    stateEl.style.borderColor = '#555';
+  }
+
+  // Just Dance 느낌의 윤곽선 렌더
+  function drawOutlineJD(outline){
+    if(!outline || outline.length < 3) return;
+    ctx.save();
+
+    // 경로
+    ctx.beginPath();
+    ctx.moveTo(outline[0][0], outline[0][1]);
+    for (let i=1; i<outline.length; i++) ctx.lineTo(outline[i][0], outline[i][1]);
+    ctx.closePath();
+
+    // 실루엣 채움
+    ctx.globalAlpha = 0.35;
+    ctx.fillStyle = '#24ffc0';
+    ctx.fill();
+
+    // 네온 글로우(굵은 스트로크를 바깥쪽으로 여러 번)
+    ctx.globalAlpha = 0.18;
+    for (let w=18; w>=6; w-=4){
+      ctx.lineWidth = w;
+      ctx.strokeStyle = '#24ffc0';
+      ctx.stroke();
+    }
+
+    // 메인 라인
+    ctx.globalAlpha = 1.0;
+    ctx.lineWidth = 3.5;
+    ctx.strokeStyle = '#00e6ff';
+    ctx.stroke();
+
+    ctx.restore();
+  }
+
+  function drawSkeletonWithState(keypoints, coverage){
+    if(!keypoints) return;
+    const dict = {};
+    keypoints.forEach(k=>{ if((k.score??0)>0.3) dict[k.name||k.part]=k; });
+
+    const st = coverage?.state || 'no_person';
+    if(st==='no_person') return;
+
+    ctx.lineWidth = (st==='full') ? 3.5 : 2.5;
+    ctx.strokeStyle = (st==='full') ? '#00e676' : '#39b3ff';
+    ctx.fillStyle   = (st==='full') ? '#c6ff00' : '#ffd66e';
+
+    pairs.forEach(([a,b])=>{
+      const A=dict[a], B=dict[b];
+      if(A&&B){ ctx.beginPath(); ctx.moveTo(A.x,A.y); ctx.lineTo(B.x,B.y); ctx.stroke(); }
+    });
+    Object.values(dict).forEach(k=>{
+      if(k.score>0.45){ ctx.beginPath(); ctx.arc(k.x,k.y,(st==='full'?4:3),0,Math.PI*2); ctx.fill(); }
+    });
+
+    // 부족 파트 안내
+    if(st==='partial' && coverage?.visible_groups){
+      const vg = coverage.visible_groups;
+      const lack = [];
+      if(!vg.ankles) lack.push('발목');
+      if(!vg.feet)   lack.push('발끝');
+      if(!vg.knees)  lack.push('무릎');
+      if(lack.length){
+        ctx.save();
+        ctx.font = '16px system-ui'; ctx.fillStyle='#ffd54f';
+        ctx.fillText(`부족: ${lack.join(', ')} · 카메라에서 한 걸음 뒤로`, 16, 24);
+        ctx.restore();
+      }
+    }
+  }
+
+  // 상세 인셋(목/어깨 확대, 지표 표기)
+  function drawDetailInset(detail, sx, sy){
+    const [x1,y1,x2,y2] = detail.box;
+    const sx1 = x1*sx, sy1 = y1*sy, sw = (x2-x1)*sx, sh = (y2-y1)*sy;
+
+    // 우상단 인셋 카드
+    const dx = overlay.width - 336, dy = 16, dw = 320, dh = 240;
+
+    ctx.save();
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.strokeStyle = '#444';
+    ctx.lineWidth = 1.5;
+    ctx.fillRect(dx-8, dy-8, dw+16, dh+16);
+    ctx.strokeRect(dx-8, dy-8, dw+16, dh+16);
+
+    // 비디오 영역을 잘라서 인셋에 표시
+    ctx.drawImage(vid, sx1, sy1, sw, sh, dx, dy, dw, dh);
+
+    // 좌표 변환(원본 px,py → 인셋 ix,iy)
+    const mapToInset = (px, py) => {
+      const pxs = px*sx, pys = py*sy;
+      const ix = dx + (pxs - sx1) * (dw / sw);
+      const iy = dy + (pys - sy1) * (dh / sh);
+      return [ix, iy];
+    };
+
+    // 상세 윤곽선
+    if (detail.outline?.length){
+      ctx.beginPath();
+      const [x0,y0] = mapToInset(detail.outline[0][0], detail.outline[0][1]);
+      ctx.moveTo(x0,y0);
+      for (let i=1;i<detail.outline.length;i++){
+        const [ix,iy] = mapToInset(detail.outline[i][0], detail.outline[i][1]);
+        ctx.lineTo(ix,iy);
+      }
+      ctx.closePath();
+      ctx.globalAlpha = 0.35; ctx.fillStyle = '#24ffc0'; ctx.fill();
+      ctx.globalAlpha = 1.0;  ctx.lineWidth=2.2; ctx.strokeStyle='#00e6ff'; ctx.stroke();
+    }
+
+    // 상세 포인트(귀/어깨/목기저)
+    if (detail.points?.length){
+      ctx.fillStyle='#ffd54f'; ctx.strokeStyle='#ffd54f';
+      detail.points.forEach(p=>{
+        const [ix,iy] = mapToInset(p.x, p.y);
+        ctx.beginPath(); ctx.arc(ix,iy,4,0,Math.PI*2); ctx.fill();
+      });
+      // 어깨 라인
+      const L = detail.points.find(p=>p.name==='left_shoulder');
+      const R = detail.points.find(p=>p.name==='right_shoulder');
+      if (L && R){
+        const [lx,ly] = mapToInset(L.x, L.y);
+        const [rx,ry] = mapToInset(R.x, R.y);
+        ctx.lineWidth=3; ctx.strokeStyle='#9cffb0';
+        ctx.beginPath(); ctx.moveTo(lx,ly); ctx.lineTo(rx,ry); ctx.stroke();
+      }
+    }
+
+    // 지표 텍스트
+    const m = detail.metrics || {};
+    const lines = [];
+    if (m.shoulder_slope_deg!==undefined) lines.push(`어깨 기울기: ${m.shoulder_slope_deg}°`);
+    if (m.shoulder_height_diff_cm!=null)  lines.push(`어깨 높이차: ${m.shoulder_height_diff_cm} cm`);
+    if (m.cva_left_deg!=null || m.cva_right_deg!=null){
+      lines.push(`CVA(거북목): L ${m.cva_left_deg??'-'}° / R ${m.cva_right_deg??'-'}°`);
+    }
+    if (m.head_tilt_deg!=null)             lines.push(`머리 기울기: ${m.head_tilt_deg}°`);
+    if (m.ear_shoulder_dx_cm_L!=null || m.ear_shoulder_dx_cm_R!=null){
+      lines.push(`귀-어깨 거리: L ${m.ear_shoulder_dx_cm_L??'-'} cm / R ${m.ear_shoulder_dx_cm_R??'-'} cm`);
+    }
+    ctx.fillStyle='#eee'; ctx.font='13px system-ui';
+    lines.forEach((t,i)=> ctx.fillText(t, dx, dy+dh+16 + i*16));
+
+    ctx.restore();
+  }
+
+  // ---------- WebSocket 연결 ----------
+  async function connectVideo(){
+    wsImg = new WebSocket(`ws://${location.host}/ws`);
+    wsImg.binaryType='blob';
+    wsImg.onopen = () => { /* console.log('video ws open'); */ };
+    wsImg.onclose = () => { /* console.log('video ws close'); */ };
+    wsImg.onerror = () => { /* 무시 */ };
+
+    // 수신 비트맵을 videoCanvas에 그리기
+    wsImg.onmessage = async ev => {
+      const bmp = await createImageBitmap(ev.data);
+      // 서버가 해상도를 바꾸면 두 캔버스 내부 크기도 맞춰준다(항상 동일해야 오버레이가 정렬됨)
+      if (vid.width !== bmp.width || vid.height !== bmp.height) {
+        vid.width = bmp.width; vid.height = bmp.height;
+        overlay.width = bmp.width; overlay.height = bmp.height;
+      }
+      vctx.drawImage(bmp, 0, 0);
+    };
+  }
+
+  function connectPose(){
+    const q = detailMode ? 'detail=neck&' : '';
+    wsPose = new WebSocket(`ws://${location.host}/ws/pose?${q}height_cm=175`);
+    wsPose.onopen = () => { /* console.log('pose ws open'); */ };
+    wsPose.onclose = () => { /* console.log('pose ws close'); */ };
+    wsPose.onerror = () => { /* 무시 */ };
+
+    wsPose.onmessage = ev => {
+      const j = JSON.parse(ev.data);
+
+      // ★ 좌표계 스케일: 서버 원본 크기 → 오버레이 내부 픽셀
+      const sx = overlay.width  / j.size.w;
+      const sy = overlay.height / j.size.h;
+
+      const scaleOutline = (outline) =>
+        outline?.map(([x,y]) => [x * sx, y * sy]) ?? null;
+      const scaleKeypoints = (kps) => !kps ? null : kps.map(k => ({...k, x:k.x*sx, y:k.y*sy }));
+      const scaleROI = (roi) => !roi ? null : [roi[0]*sx, roi[1]*sy, roi[2]*sx, roi[3]*sy];
+
+      const outlineScaled   = scaleOutline(j.outline);
+      const keypointsScaled = scaleKeypoints(j.keypoints);
+      const roiScaled       = scaleROI(j.roi);
+
+      ctx.clearRect(0,0,overlay.width,overlay.height);
+
+      // ROI 보조 박스
+      if (roiScaled) {
+        const [x1,y1,x2,y2] = roiScaled;
+        ctx.save(); ctx.setLineDash([6,4]); ctx.strokeStyle='#888'; ctx.lineWidth=1.2;
+        ctx.strokeRect(x1, y1, x2-x1, y2-y1); ctx.restore();
+      }
+
+      if (outlineScaled) drawOutlineJD(outlineScaled);
+      setBadge(j.coverage?.state, j.coverage?.score ?? 0);
+
+      // ★ 스켈레톤은 반드시 스케일된 좌표로!
+      drawSkeletonWithState(keypointsScaled, j.coverage);
+
+      // 상세 모드면 인셋 렌더
+      if (detailMode && j.detail?.box){
+        drawDetailInset(j.detail, sx, sy);
+      }
+    };
+  }
+
+  async function start() {
+    await connectVideo();
+    connectPose();
+    btn.textContent = '끄기';
+  }
+
+  function stop(){
+    if (wsImg && wsImg.readyState===WebSocket.OPEN) wsImg.close();
+    if (wsPose && wsPose.readyState===WebSocket.OPEN) wsPose.close();
+    wsImg = wsPose = null;
+    vctx.clearRect(0,0,vid.width,vid.height);
+    ctx.clearRect(0,0,overlay.width,overlay.height);
+    setBadge('no_person', 0);
+    btn.textContent = '웹캠 켜기';
+  }
+
+  // ---------- 버튼 동작 ----------
+  btn.addEventListener('click', ()=> {
+    if (btn.textContent==='웹캠 켜기') start(); else stop();
+  });
+
+  btnDetail.addEventListener('click', () => {
+    detailMode = !detailMode;
+    btnDetail.textContent = `상세 측정: ${detailMode ? '켬' : '끔'}`;
+    // 포즈 소켓을 detail 파라미터로 재연결
+    if (wsPose && wsPose.readyState === WebSocket.OPEN) {
+      wsPose.close();
+    }
+    if (wsImg) {
+      connectPose(); // 비디오는 그대로 두고 포즈만 재연결
+    }
+  });
+})();
+</script>
 </body>
-</html>
