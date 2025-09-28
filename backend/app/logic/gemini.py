@@ -4,34 +4,42 @@ import os
 from dotenv import load_dotenv
 import google.generativeai as genai
 
-# .env 파일에서 환경 변수(API 키) 로드
 load_dotenv()
-# API 키 설정
 genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
-# Gemini 모델 초기화 (안정적인 최신 버전 사용)
-gemini_model = genai.GenerativeModel('gemini-1.5-flash-latest')
+
+# --- 👇 모델 초기화 시, 최대 출력 토큰을 설정합니다 ---
+generation_config = genai.GenerationConfig(
+    max_output_tokens=50 # 답변을 약 20~30글자 내외로 제한
+)
+gemini_model = genai.GenerativeModel(
+    'gemini-flash-latest',
+    generation_config=generation_config
+)
+# ----------------------------------------------------
 
 async def get_conversational_feedback(exercise_name: str, angle: float, rep_counter: int, stage: str, history: list) -> str:
-    """
-    대화 히스토리를 포함하여 Gemini API를 호출하고, 대화형 피드백을 생성합니다.
-    """
     if angle is None:
         return "자세를 분석하고 있습니다..."
 
-    # 현재 상태를 Gemini가 이해하기 쉽게 문장으로 만듭니다.
     current_state_summary = f"사용자는 {exercise_name} 운동 중이며, 현재 {rep_counter}개를 완료했습니다. 현재 자세 단계는 '{stage}'(up/down)이며, 주요 관절 각도는 {int(angle)}도 입니다."
     
+    # --- 👇 AI에게 보내는 지시문을 훨씬 더 강력하고 명확하게 수정합니다 ---
     prompt = f"""
-    당신은 사용자의 자세를 교정해주는 최고의 AI 퍼스널 트레이너입니다.
-    아래는 지금까지 사용자와 나눈 대화 내용(히스토리)과 현재 사용자의 자세 정보입니다.
-    
-    <대화 히스토리>
+    You are an AI personal trainer who gives feedback in a single, short, encouraging sentence in Korean.
+    DO NOT use markdown. DO NOT use emojis. DO NOT write multiple paragraphs.
+    Analyze the user's current state based on the conversation history.
+
+    ## Conversation History:
     {history}
     
-    <현재 자세 정보>
+    ## Current User State:
     {current_state_summary}
 
+    Based on all this information, generate ONLY ONE concise sentence of feedback.
     
+    Example 1: 좋습니다! 조금만 더 내려가세요.
+    Example 2: 5회 완료! 자세가 아주 안정적이네요.
+    Example 3: 좋아요, 다시 일어서 볼까요?
     """
 
     try:
