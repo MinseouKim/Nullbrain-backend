@@ -1,0 +1,23 @@
+version: "3.8"
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: nb_pg
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: nullbrain
+      POSTGRES_PASSWORD: 1234
+      POSTGRES_DB: nullbrain
+    ports:
+      - "5433:5432"
+    volumes:
+      - nb_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nullbrain -d nullbrain"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  nb_pgdata:
