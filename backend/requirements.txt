@@ -7,12 +7,8 @@ python-dotenv
 google-generativeai
 numpy
 mediapipe
-<<<<<<< HEAD
-requests
-=======
 requests
 
 SQLAlchemy==2.0.32
 psycopg2-binary==2.9.9
 pydantic==2.8.2
->>>>>>> b6c3749c66aac49b3cc9f9a52939acddbcda248c
