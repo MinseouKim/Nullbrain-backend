@@ -60,6 +60,26 @@ app.main:app → app 폴더 안 main.py에 있는 app 객체를 가리킵니다.
 결과 : {"message":"pong"}
 
 
+
+### postgreSQL (docker)
+
+1) 백그라운드 실행
+docker compose up -d
+
+2) 상태 확인
+docker ps
+
+3) 로그 보기
+docker logs -f pg docker ps -a | grep pg # pg 관련 컨테이너 확인 docker inspect pg | grep -A3 Mounts # 기존 컨테이너 볼륨 경로 확인
+
+컨테이너 내부 접속(psql)
+docker exec -it pg psql -U synctogether -d synctogether
+
+백업/복원
+docker exec -t pg pg_dump -U synctogether synctogether > backup.sql cat backup.sql | docker exec -i pg psql -U synctogether -d synctogether
+
+컨테이너/볼륨 제거 (주의: 데이터 삭제)
+docker compose down -v
 웹캠 페이지 : http://127.0.0.1:8000/static/index.html
 
 스쿼트 확인 : http://127.0.0.1:8000/squat
