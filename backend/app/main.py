@@ -10,6 +10,8 @@ from app.api import ws
 from app.api.api_profile import router as profile_router
 from app.db import engine
 from app import models
+from app.api.api_measure import router as measure_router
+from app.api import api_analysis
 
 
 
@@ -46,11 +48,5 @@ app.add_middleware(
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 app.include_router(ws.router)
 app.include_router(profile_router)
-
-# --- 이 부분은 이제 React에서 처리하므로 삭제하거나 주석 처리해도 됩니다 --- #
-# @app.get("/{exercise_name}", response_class=HTMLResponse)
-# async def serve_exercise_app(exercise_name: str):
-#     with open("app/static/index.html", "r", encoding="utf-8") as f:
-#         html_content = f.read()
-#     html_with_exercise = html_content.replace("EXERCISE_PLACEHOLDER", exercise_name)
-#     return HTMLResponse(content=html_with_exercise, status_code=200)
+app.include_router(measure_router)
+app.include_router(api_analysis.router)

@@ -1,5 +1,4 @@
-# backend/app/api/ws.py
-
+import json
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from app.logic.squat import get_squat_angle
 from app.logic.pushup import get_pushup_angle
@@ -7,11 +6,24 @@ from app.logic.gemini import get_conversational_feedback
 import time
 import mediapipe as mp # 관절 인덱스 번호를 위해 import 합니다.
 
+from pathlib import Path
+
 router = APIRouter()
 
 @router.websocket("/ws/{exercise_name}")
 async def websocket_endpoint(websocket: WebSocket, exercise_name: str):
     await websocket.accept()
+
+    # 더미데이터 불러오기
+    body_profile = None
+    try:
+        dummy_path = Path(__file__).resolve().parent / "dummy_profile.json"
+        with dummy_path.open("r", encoding="utf-8") as f:
+            body_profile = json.load(f)
+        print("[INFO] 더미 체형 데이터를 성공적으로 불러왔습니다.")
+    except Exception as e:
+        print(f"[INFO] 더미 체형 데이터 로딩 실패: {e}")
+
     
     rep_counter = 0
     stage = "up"
@@ -26,7 +38,7 @@ async def websocket_endpoint(websocket: WebSocket, exercise_name: str):
         while True:
             landmarks_data = await websocket.receive_json()
             
-            # --- 👇 1. 스쿼트 관절 가시성 사전 검사 ---
+            # --- 1. 스쿼트 관절 가시성 사전 검사 ---
             if exercise_name == 'squat':
                 visibility_threshold = 0.6 # 가시성 기준값 (0.0 ~ 1.0)
                 try:
@@ -75,7 +87,8 @@ async def websocket_endpoint(websocket: WebSocket, exercise_name: str):
             current_time = time.time()
             if (stage != previous_stage or (current_time - last_api_call_time) > 3) and angle is not None:
                 feedback = await get_conversational_feedback(
-                    exercise_name, angle, rep_counter, stage, conversation_history
+                    exercise_name, angle, rep_counter, stage, conversation_history,
+                    body_profile = body_profile
                 )
                 
                 user_action = f"({exercise_name} 자세, 각도: {int(angle)}, 상태: {stage})"

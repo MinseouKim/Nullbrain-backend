@@ -1,0 +1,51 @@
+{
+  "height_cm": 175.0,
+  "cm_per_px": 0.23,
+  "baseline": {
+    "shoulder_width_px": 380.5,
+    "wingspan_px": 1720.2,
+    "pelvis_width_px": 310.0
+  },
+  "lengths_cm": {
+    "upperArmL": 35.2,
+    "upperArmR": 35.5,
+    "forearmL": 28.1,
+    "forearmR": 28.3,
+    "thighL": 45.8,
+    "thighR": 46.1,
+    "shankL": 42.5,
+    "shankR": 42.3,
+    "legL_total": 88.3,
+    "legR_total": 88.4,
+    "trunk_len": 55.0
+  },
+  "circumferences_cm": {
+    "chest": 98.5,
+    "waist": 82.1,
+    "hip": 95.5
+  },
+  "angles_deg": {
+    "kneeL": 175.5,
+    "kneeR": 176.0,
+    "hip_side": 178.0,
+    "ankle_side": 85.0,
+    "trunk_fwd": 3.5
+  },
+  "rom_deg": {
+    "kneeL": 105.0,
+    "kneeR": 106.5,
+    "hipL": 95.0,
+    "hipR": 96.0,
+    "ankle": 30.5
+  },
+  "symmetry": {
+    "shoulder_delta_px": -12.5,
+    "pelvis_delta_px": 8.5
+  },
+  "posture": {
+    "neck_fwd": 15.5,
+    "trunk_fwd": 5.0,
+    "varus_valgus_L": -2.1,
+    "varus_valgus_R": -2.5
+  }
+}

@@ -1,75 +1,26 @@
 # backend/app/logic/gemini.py
-<<<<<<< HEAD
-
-import os
+import os, asyncio
 from dotenv import load_dotenv
 import google.generativeai as genai
 
 load_dotenv()
-genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
-
-# --- 👇 모델 초기화 시, 최대 출력 토큰을 설정합니다 ---
-generation_config = genai.GenerationConfig(
-    max_output_tokens=50 # 답변을 약 20~30글자 내외로 제한
-)
-gemini_model = genai.GenerativeModel(
-    'gemini-flash-latest',
-    generation_config=generation_config
-)
-# ----------------------------------------------------
-
-async def get_conversational_feedback(exercise_name: str, angle: float, rep_counter: int, stage: str, history: list) -> str:
-    if angle is None:
-        return "자세를 분석하고 있습니다..."
-
-    current_state_summary = f"사용자는 {exercise_name} 운동 중이며, 현재 {rep_counter}개를 완료했습니다. 현재 자세 단계는 '{stage}'(up/down)이며, 주요 관절 각도는 {int(angle)}도 입니다."
-    
-    # --- 👇 AI에게 보내는 지시문을 훨씬 더 강력하고 명확하게 수정합니다 ---
-    prompt = f"""
-    You are an AI personal trainer who gives feedback in a single, short, encouraging sentence in Korean.
-    DO NOT use markdown. DO NOT use emojis. DO NOT write multiple paragraphs.
-    Analyze the user's current state based on the conversation history.
-
-    ## Conversation History:
-    {history}
-    
-    ## Current User State:
-    {current_state_summary}
-
-    Based on all this information, generate ONLY ONE concise sentence of feedback.
-    
-    Example 1: 좋습니다! 조금만 더 내려가세요.
-    Example 2: 5회 완료! 자세가 아주 안정적이네요.
-    Example 3: 좋아요, 다시 일어서 볼까요?
-    """
-
-    try:
-        response = await gemini_model.generate_content_async(prompt)
-        if not response.parts:
-            return "피드백 생성 중... 자세를 조금 바꿔보세요."
-        return response.text.strip()
-    except Exception as e:
-        print(f"Gemini API 호출 오류: {e}")
-        return "피드백 생성 중 오류가 발생했습니다."
-=======
-import os, asyncio
-from dotenv import load_dotenv
-
-load_dotenv()
 
 API_KEY = os.getenv("GOOGLE_API_KEY")
-MODEL  = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")  # 'gemini-flash-latest' 도 호환됨
+MODEL = os.getenv("GEMINI_MODEL", "models/gemini-2.5-flash")  # 'gemini-flash-latest' 도 호환됨
+_NEW = None
+ggenai = None
+
 
 # 어떤 SDK가 설치돼 있는지 감지
 _NEW = None
 ggenai = None
 try:
-    # 신 SDK (google-genai; 2024 하반기~)
+    # 신 SDK
     from google import genai as ggenai  # type: ignore
     _NEW = True
 except Exception:
     try:
-        # 구 SDK (google-generativeai)
+        # 구 SDK
         import google.generativeai as ggenai  # type: ignore
         _NEW = False
     except Exception:
@@ -77,107 +28,115 @@ except Exception:
         _NEW = None
 
 
-def _fallback_feedback(exercise: str, angle, rep: int, stage: str) -> str:
-    # API 키 없거나 SDK 문제 시 한 문장 피드백
-    if exercise == "squat":
-        if angle is None:
-            return "무릎과 발끝을 같은 방향으로, 가슴을 펴고 중심은 뒤꿈치에 두세요."
-        if stage == "down" and angle < 90:
-            return "좋아요! 깊이는 충분해요. 무릎이 안쪽으로 모이지 않게 주의하세요."
-        if angle > 160:
-            return "너무 펴졌어요. 천천히 내려가며 코어에 힘 주세요."
-        return "정면을 보고 가슴을 열고, 무릎-발끝 정렬을 유지하세요."
-    if exercise == "pushup":
-        if angle is None:
-            return "머리·몸통·발목이 일직선이 되도록 코어에 힘 주세요."
-        if stage == "down" and angle < 90:
-            return "잘하고 있어요! 팔꿈치는 45° 정도 유지하며 가슴을 더 가까이 내려보세요."
-        if angle > 160:
-            return "팔이 과하게 펴졌어요. 다음 반복 준비해요."
-        return "어깨를 내려 긴 목을 만들고, 몸통은 일직선 유지!"
-    return "호흡을 고르고 정렬을 우선하세요."
-
-# 신/구 SDK 각각 generate 함수 래핑
 _async_generate = None
 
 if not API_KEY or ggenai is None:
-    # 키 없거나 SDK 자체가 없는 경우
     async def _async_generate(prompt: str) -> str:
-        return ""
+        return "⚠️ Gemini API Key가 없어서 응답을 생성할 수 없습니다."
 else:
-    if _NEW:  # 신 SDK: from google import genai
+    safety_settings = [
+        {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+    ]
+    generation_config = {
+        "temperature": 0.7,
+    }
+
+    if _NEW:  # 신 SDK
         client = ggenai.Client(api_key=API_KEY)
 
         async def _async_generate(prompt: str) -> str:
-            # 신 SDK는 동기 호출이므로 스레드로 우회
             resp = await asyncio.to_thread(
-                lambda: client.models.generate_content(model=MODEL, contents=prompt)
+                lambda: client.models.generate_content(
+                    model=MODEL,
+                    contents=prompt,
+                    safety_settings=safety_settings,
+                )
             )
-            # resp.text 가 없을 수 있어 안전하게 추출
             if getattr(resp, "text", None):
-                return resp.text
+                return resp.text.strip()
             if getattr(resp, "candidates", None):
-                try:
-                    return resp.candidates[0].content.parts[0].text  # type: ignore
-                except Exception:
-                    pass
-            return ""
-    else:     # 구 SDK: import google.generativeai as genai
+                for cand in resp.candidates:
+                    if cand.content and cand.content.parts:
+                        return cand.content.parts[0].text.strip()
+            return "⚠️ AI가 응답을 생성하지 않았습니다."
+    else:  # 구 SDK
         ggenai.configure(api_key=API_KEY)
-        # GenerationConfig 클래스를 안 써도 dict로 넣으면 동작(버전차 안전)
-        model = ggenai.GenerativeModel(MODEL, generation_config={"max_output_tokens": 50})
+        # 💡 중요: 모델 생성 시에는 config를 빼고, 안전 설정만 넣습니다.
+        model = ggenai.GenerativeModel(
+            MODEL,
+            safety_settings=safety_settings,
+        )
 
         async def _async_generate(prompt: str) -> str:
-            # 버전에 따라 async 메서드가 없을 수 있음 → 안전 처리
+            # 💡 중요: API를 호출하는 이 시점에 generation_config를 직접 전달합니다.
             if hasattr(model, "generate_content_async"):
-                resp = await model.generate_content_async(prompt)  # type: ignore
+                resp = await model.generate_content_async(
+                    prompt,
+                    generation_config=generation_config
+                )
             else:
-                resp = await asyncio.to_thread(model.generate_content, prompt)
-            return getattr(resp, "text", "") or ""
+                resp = await asyncio.to_thread(
+                    model.generate_content,
+                    prompt,
+                    generation_config=generation_config
+                )
+
+            if getattr(resp, "text", None):
+                return resp.text.strip()
+            if getattr(resp, "candidates", None):
+                for cand in resp.candidates:
+                    if cand.content and cand.content.parts:
+                        return cand.content.parts[0].text.strip()
+            # 💡 상세한 오류 확인을 위해 응답 자체를 출력해볼 수 있습니다.
+            print(f"Gemini 응답 없음. 전체 응답: {resp}")
+            return "⚠️ AI가 응답을 생성하지 않았습니다."
 
 
 async def get_conversational_feedback(
     exercise_name: str,
     angle: float | None,
-    rep_counter: int,
+    rep_counter: int, # 이 값은 참고용으로만 사용하도록 프롬프트를 수정합니다.
     stage: str,
     history: list,
+    body_profile: dict | None = None,
 ) -> str:
-    """단 한 문장의 한국어 코칭 문장 반환(에러/무키 시에도 안전)."""
-    if not API_KEY or _NEW is None:
-        # 키 없거나 SDK 미탑재
-        return _fallback_feedback(exercise_name, angle, rep_counter, stage)
-
-    # 매우 짧고 명확한 한 문장만 요청
-    prompt = f"""
-당신은 한국어 AI 트레이너입니다. 아래 정보를 바탕으로 격려 한 문장만 짧게 말하세요.
-- 운동: {exercise_name}
-- 반복수: {rep_counter}
-- 단계: {stage}
-- 각도/지표: {int(angle) if angle is not None else 'N/A'}
-- 최근 대화 요약: {history[-6:] if history else []}
-
-규칙:
-- 한국어 한 문장, 60자 이내.
-- 구체적이고 실행 가능한 팁 1개 포함.
-- 이모지/마크다운/줄바꿈 금지.
-예) 좋습니다! 무릎이 안으로 모이지 않게 발끝 방향 유지하세요.
+    """
+    체형 분석 정보를 바탕으로 명확한 판단과 구체적인 피드백을 요청합니다.
+    """
+    
+    # 체형 정보가 있을 때만 프롬프트에 해당 섹션을 추가합니다.
+    profile_section = ""
+    if body_profile:
+        profile_section = f"""
+* 사용자의 체형 분석 정보:
+{body_profile}
 """
 
+    prompt = f"""
+당신은 사용자의 체형 데이터를 기반으로 자세를 분석하는 전문 AI 퍼스널 트레이너입니다. 
+주어진 정보를 바탕으로 사용자의 현재 운동 자세가 좋은지 나쁜지 명확하게 판단하고, 
+구체적인 피드백을 딱 한 문장으로 제공하세요.
+
+{profile_section}
+
+* 현재 운동 정보:
+- 운동 종류: {exercise_name}
+- 현재 무릎 각도 (참고용): {int(angle) if angle is not None else 'N/A'}
+- 현재 단계 (참고용): {stage}
+
+* 피드백 생성 규칙:
+1.  **가장 먼저 '자세가 좋습니다' 또는 '자세가 불안정합니다' 와 같이 명확한 판정으로 문장을 시작하세요.**
+2.  왜 그렇게 판단했는지에 대한 **이유를 위 체형 분석 정보를 근거로** 간략하게 설명하세요. (예: "어깨 불균형 데이터에 따르면...")
+3.  개선할 수 있는 **구체적이고 실행 가능한 팁**을 한 가지 제안하세요.
+4.  전체 답변은 반드시 **한국어 한 문장, 70자 이내**로 매우 간결해야 합니다.
+5.  '반복수'는 떨림 현상 때문에 부정확할 수 있으니 **절대 언급하지 마세요.**
+6.  이모지, 마크다운, 줄바꿈을 사용하지 마세요.
+"""
     try:
-        text = await _async_generate(prompt)
-        text = (text or "").strip()
-        if not text:
-            return _fallback_feedback(exercise_name, angle, rep_counter, stage)
-        # 혹시 길면 한 문장으로 다듬기
-        if "。" in text or "!" in text or "?" in text or "." in text:
-            # 첫 문장만
-            for sep in ["。", "!", "?", "."]:
-                if sep in text:
-                    text = text.split(sep)[0] + sep
-                    break
-        return text
+        return await _async_generate(prompt)
     except Exception as e:
         print("Gemini error:", e)
-        return _fallback_feedback(exercise_name, angle, rep_counter, stage)
->>>>>>> b6c3749c66aac49b3cc9f9a52939acddbcda248c
+        return f"⚠️ Gemini 호출 실패: {e}"
