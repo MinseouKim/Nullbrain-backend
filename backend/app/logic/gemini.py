@@ -1,142 +1,90 @@
-# backend/app/logic/gemini.py
-import os, asyncio
+import os
+import json
+import asyncio
 from dotenv import load_dotenv
 import google.generativeai as genai
 
+# --- 1. 환경 설정 ---
 load_dotenv()
-
 API_KEY = os.getenv("GOOGLE_API_KEY")
-MODEL = os.getenv("GEMINI_MODEL", "models/gemini-2.5-flash")  # 'gemini-flash-latest' 도 호환됨
-_NEW = None
-ggenai = None
+# 👇 [수정] 기본 모델명을 요청하신 'gemini-2.5-flash'로 변경했습니다.
+MODEL_NAME = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
+# --- 2. Gemini 모델 설정 ---
+model = None
+if API_KEY:
+    genai.configure(api_key=API_KEY)
 
-# 어떤 SDK가 설치돼 있는지 감지
-_NEW = None
-ggenai = None
-try:
-    # 신 SDK
-    from google import genai as ggenai  # type: ignore
-    _NEW = True
-except Exception:
-    try:
-        # 구 SDK
-        import google.generativeai as ggenai  # type: ignore
-        _NEW = False
-    except Exception:
-        ggenai = None
-        _NEW = None
-
-
-_async_generate = None
-
-if not API_KEY or ggenai is None:
-    async def _async_generate(prompt: str) -> str:
-        return "⚠️ Gemini API Key가 없어서 응답을 생성할 수 없습니다."
-else:
     safety_settings = [
         {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
         {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
         {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
         {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
     ]
+
     generation_config = {
         "temperature": 0.7,
+        "response_mime_type": "application/json",
     }
+    
+    # 모델 인스턴스 생성
+    model = genai.GenerativeModel(
+        MODEL_NAME,
+        safety_settings=safety_settings,
+        generation_config=generation_config
+    )
 
-    if _NEW:  # 신 SDK
-        client = ggenai.Client(api_key=API_KEY)
-
-        async def _async_generate(prompt: str) -> str:
-            resp = await asyncio.to_thread(
-                lambda: client.models.generate_content(
-                    model=MODEL,
-                    contents=prompt,
-                    safety_settings=safety_settings,
-                )
-            )
-            if getattr(resp, "text", None):
-                return resp.text.strip()
-            if getattr(resp, "candidates", None):
-                for cand in resp.candidates:
-                    if cand.content and cand.content.parts:
-                        return cand.content.parts[0].text.strip()
-            return "⚠️ AI가 응답을 생성하지 않았습니다."
-    else:  # 구 SDK
-        ggenai.configure(api_key=API_KEY)
-        # 💡 중요: 모델 생성 시에는 config를 빼고, 안전 설정만 넣습니다.
-        model = ggenai.GenerativeModel(
-            MODEL,
-            safety_settings=safety_settings,
-        )
-
-        async def _async_generate(prompt: str) -> str:
-            # 💡 중요: API를 호출하는 이 시점에 generation_config를 직접 전달합니다.
-            if hasattr(model, "generate_content_async"):
-                resp = await model.generate_content_async(
-                    prompt,
-                    generation_config=generation_config
-                )
-            else:
-                resp = await asyncio.to_thread(
-                    model.generate_content,
-                    prompt,
-                    generation_config=generation_config
-                )
-
-            if getattr(resp, "text", None):
-                return resp.text.strip()
-            if getattr(resp, "candidates", None):
-                for cand in resp.candidates:
-                    if cand.content and cand.content.parts:
-                        return cand.content.parts[0].text.strip()
-            # 💡 상세한 오류 확인을 위해 응답 자체를 출력해볼 수 있습니다.
-            print(f"Gemini 응답 없음. 전체 응답: {resp}")
-            return "⚠️ AI가 응답을 생성하지 않았습니다."
-
-
+# --- 3. AI 피드백 생성 함수 ---
 async def get_conversational_feedback(
     exercise_name: str,
-    angle: float | None,
-    rep_counter: int, # 이 값은 참고용으로만 사용하도록 프롬프트를 수정합니다.
+    rep_counter: int,
     stage: str,
-    history: list,
     body_profile: dict | None = None,
-) -> str:
+    real_time_analysis: dict | None = None,
+    angle: float | None = None,
+    history: list | None = None,
+) -> dict:
     """
-    체형 분석 정보를 바탕으로 명확한 판단과 구체적인 피드백을 요청합니다.
+    체형 및 실시간 분석 정보를 바탕으로 '정확도'와 '피드백'을 JSON으로 요청합니다.
     """
-    
-    # 체형 정보가 있을 때만 프롬프트에 해당 섹션을 추가합니다.
-    profile_section = ""
-    if body_profile:
-        profile_section = f"""
-* 사용자의 체형 분석 정보:
-{body_profile}
-"""
+    if not model:
+        return {"accuracy": 0, "feedback": "⚠️ Gemini API Key가 설정되지 않았습니다."}
 
+    profile_section = f"* 사용자의 체형 분석 정보 (정적 데이터):\n{body_profile}\n" if body_profile else ""
+    analysis_section = f"* 이번 세트의 실시간 움직임 분석 결과 (동적 데이터):\n{real_time_analysis}\n" if real_time_analysis else ""
+    
     prompt = f"""
-당신은 사용자의 체형 데이터를 기반으로 자세를 분석하는 전문 AI 퍼스널 트레이너입니다. 
-주어진 정보를 바탕으로 사용자의 현재 운동 자세가 좋은지 나쁜지 명확하게 판단하고, 
-구체적인 피드백을 딱 한 문장으로 제공하세요.
+당신은 사용자의 정적 체형 데이터와 실시간 움직임 데이터를 종합적으로 분석하는 전문 AI 퍼스널 트레이너입니다. 주어진 정보를 바탕으로, 반드시 JSON 형식으로 'accuracy'와 'feedback' 두 가지 키를 포함하여 답변하세요.
 
 {profile_section}
+{analysis_section}
 
-* 현재 운동 정보:
+* 현재 운동 정보 (참고용):
 - 운동 종류: {exercise_name}
-- 현재 무릎 각도 (참고용): {int(angle) if angle is not None else 'N/A'}
-- 현재 단계 (참고용): {stage}
+- 단계: {stage}
 
-* 피드백 생성 규칙:
-1.  **가장 먼저 '자세가 좋습니다' 또는 '자세가 불안정합니다' 와 같이 명확한 판정으로 문장을 시작하세요.**
-2.  왜 그렇게 판단했는지에 대한 **이유를 위 체형 분석 정보를 근거로** 간략하게 설명하세요. (예: "어깨 불균형 데이터에 따르면...")
-3.  개선할 수 있는 **구체적이고 실행 가능한 팁**을 한 가지 제안하세요.
-4.  전체 답변은 반드시 **한국어 한 문장, 70자 이내**로 매우 간결해야 합니다.
-5.  '반복수'는 떨림 현상 때문에 부정확할 수 있으니 **절대 언급하지 마세요.**
-6.  이모지, 마크다운, 줄바꿈을 사용하지 마세요.
+* JSON 출력 규칙:
+1. 'accuracy' 키에는 0부터 100까지의 정수로 전체적인 운동 정확도를 평가하여 숫자로만 제공하세요.
+2. 'feedback' 키에는 평가에 대한 종합적인 피드백을 70자 이내의 한국어 한 문장으로 제공하세요. 이 피드백은 '자세가 좋습니다/불안정합니다' 등으로 시작할 수 있습니다. 꼭 이러한 단어가 아니여도 됩니다.
+3. 피드백에는 '반복수'나 '각도'를 언급하지 마세요.
+
+예시 출력:
+{{
+  "accuracy": 85,
+  "feedback": "자세가 불안정합니다. 좌우 불균형 데이터를 볼 때 왼쪽으로 쏠리는 경향이 있으니 중앙에 무게를 두세요."
+}}
 """
     try:
-        return await _async_generate(prompt)
+        # 모델 API를 직접 호출
+        resp = await model.generate_content_async(prompt)
+        # Gemini가 생성한 텍스트를 JSON 객체로 파싱
+        return json.loads(resp.text)
     except Exception as e:
-        print("Gemini error:", e)
-        return f"⚠️ Gemini 호출 실패: {e}"
+        print(f"--- GEMINI API ERROR ---")
+        print(f"Error: {e}")
+        # Gemini API 자체 에러인 경우, 원본 응답을 확인하는 것이 매우 중요합니다.
+        if 'resp' in locals() and hasattr(resp, 'prompt_feedback'):
+             print(f"Prompt Feedback: {resp.prompt_feedback}")
+        print(f"--------------------------")
+        # 실패하더라도 항상 동일한 JSON 구조로 반환하여 프론트엔드 에러 방지
+        return {"accuracy": 0, "feedback": f"⚠️ AI 피드백 생성에 실패했습니다."}
