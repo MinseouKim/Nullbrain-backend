@@ -7,7 +7,6 @@ import google.generativeai as genai
 # --- 1. 환경 설정 ---
 load_dotenv()
 API_KEY = os.getenv("GOOGLE_API_KEY")
-# 👇 [수정] 기본 모델명을 요청하신 'gemini-2.5-flash'로 변경했습니다.
 MODEL_NAME = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
 # --- 2. Gemini 모델 설정 ---
@@ -27,7 +26,6 @@ if API_KEY:
         "response_mime_type": "application/json",
     }
     
-    # 모델 인스턴스 생성
     model = genai.GenerativeModel(
         MODEL_NAME,
         safety_settings=safety_settings,
