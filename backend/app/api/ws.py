@@ -1,112 +1,75 @@
+# backend/app/api/ws.py
 import json
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from app.logic.squat import get_squat_angle
-from app.logic.pushup import get_pushup_angle
+from sqlalchemy.orm import Session
+from app.db import SessionLocal
 from app.logic.gemini import get_conversational_feedback
-import time
-import mediapipe as mp # 관절 인덱스 번호를 위해 import 합니다.
-
-from pathlib import Path
+from app.models import Profile
 
 router = APIRouter()
 
-@router.websocket("/ws/{exercise_name}")
-async def websocket_endpoint(websocket: WebSocket, exercise_name: str):
-    await websocket.accept()
+def get_latest_profile() -> dict | None:
+    """DB에서 가장 최근 체형 분석(Profile) 데이터 로드"""
+    db: Session = SessionLocal()
+    try:
+        profile = db.query(Profile).order_by(Profile.created_at.desc()).first()
+        if profile:
+            return {
+                "id": str(profile.id),
+                "version": profile.version,
+                "body": profile.body,
+                "measures": profile.measures,
+            }
+        return None
+    finally:
+        db.close()
 
-    # 더미데이터 불러오기
+@router.websocket("/ws/feedback")
+async def websocket_feedback(websocket: WebSocket):
+    await websocket.accept()
+    print("[WS] 클라이언트 연결됨 (AI 피드백 채널)")
+
+    # --- 체형 데이터 DB에서 로드 ---
     body_profile = None
     try:
-        dummy_path = Path(__file__).resolve().parent / "dummy_profile.json"
-        with dummy_path.open("r", encoding="utf-8") as f:
-            body_profile = json.load(f)
-        print("[INFO] 더미 체형 데이터를 성공적으로 불러왔습니다.")
+        body_profile = get_latest_profile()
+        if body_profile:
+            print("[INFO] 최신 체형 데이터 로드 성공")
+        else:
+            print("[WARN] DB에 체형 데이터가 없습니다.")
     except Exception as e:
-        print(f"[INFO] 더미 체형 데이터 로딩 실패: {e}")
-
-    
-    rep_counter = 0
-    stage = "up"
-    feedback = "운동을 시작하세요."
-    conversation_history = []
-    last_api_call_time = 0
-    
-    # MediaPipe의 관절 인덱스를 쉽게 사용하기 위해 변수 선언
-    mp_pose = mp.solutions.pose.PoseLandmark
+        print(f"[ERROR] 체형 데이터 로드 실패: {e}")
 
     try:
         while True:
-            landmarks_data = await websocket.receive_json()
-            
-            # --- 1. 스쿼트 관절 가시성 사전 검사 ---
-            if exercise_name == 'squat':
-                visibility_threshold = 0.6 # 가시성 기준값 (0.0 ~ 1.0)
-                try:
-                    # 왼쪽 하체 관절들의 가시성 점수를 확인합니다.
-                    hip_visible = landmarks_data[mp_pose.LEFT_HIP.value]['visibility'] > visibility_threshold
-                    knee_visible = landmarks_data[mp_pose.LEFT_KNEE.value]['visibility'] > visibility_threshold
-                    ankle_visible = landmarks_data[mp_pose.LEFT_ANKLE.value]['visibility'] > visibility_threshold
+            # 프론트에서 이미 계산된 결과를 받음
+            data = await websocket.receive_json()
+            exercise_name = data.get("exerciseName")
+            rep_count = data.get("repCount")
+            landmark_history = data.get("landmarkHistory", [])
+            analysis_data = data.get("analysis", {})
+            stage = data.get("stage", "completed")
 
-                    # 세 관절 중 하나라도 잘 보이지 않으면, 안내 메시지를 보내고 이번 프레임 처리를 건너뜁니다.
-                    if not (hip_visible and knee_visible and ankle_visible):
-                        payload = { 
-                            "feedback": "하체 전체가 잘 보이도록 뒤로 물러나세요.", 
-                            "angle": None,
-                            "rep_count": rep_counter
-                        }
-                        await websocket.send_json(payload)
-                        continue # 다음 프레임으로 넘어감
-                except (IndexError, KeyError):
-                    # 프론트에서 불완전한 랜드마크 데이터가 올 경우를 대비한 예외 처리
-                    continue
-            # ------------------------------------
+            # --- Gemini 호출 ---
+            ai_result = await get_conversational_feedback(
+                exercise_name=exercise_name,
+                rep_counter=rep_count,
+                stage=stage,
+                real_time_analysis=analysis_data,
+                body_profile=body_profile,
+                history=[],
+            )
 
-            angle = None
-            if exercise_name == 'squat':
-                angle = get_squat_angle(landmarks_data)
-            elif exercise_name == 'pushup':
-                angle = get_pushup_angle(landmarks_data)
-            
-            previous_stage = stage 
-
-            if angle is not None:
-                if exercise_name == 'squat':
-                    if angle < 100 and stage == 'up':
-                        stage = 'down'
-                        rep_counter += 1
-                    elif angle > 160 and stage == 'down':
-                        stage = 'up'
-                
-                elif exercise_name == 'pushup':
-                    if angle < 90 and stage == 'up':
-                        stage = 'down'
-                        rep_counter += 1
-                    elif angle > 160 and stage == 'down':
-                        stage = 'up'
-
-            current_time = time.time()
-            if (stage != previous_stage or (current_time - last_api_call_time) > 3) and angle is not None:
-                feedback = await get_conversational_feedback(
-                    exercise_name, angle, rep_counter, stage, conversation_history,
-                    body_profile = body_profile
-                )
-                
-                user_action = f"({exercise_name} 자세, 각도: {int(angle)}, 상태: {stage})"
-                conversation_history.append(f"사용자: {user_action}")
-                conversation_history.append(f"AI 코치: {feedback}") 
-                if len(conversation_history) > 10:
-                    conversation_history = conversation_history[-10:]
-                
-                last_api_call_time = current_time
-            
-            payload = { 
-                "feedback": feedback, 
-                "angle": int(angle) if angle is not None else None,
-                "rep_count": rep_counter
+            # --- 응답 정리 ---
+            payload = {
+                "exerciseName": exercise_name,
+                "repCount": rep_count,
+                "feedback": ai_result.get("feedback", "AI 피드백 생성 실패"),
+                "accuracy": ai_result.get("accuracy", 0),
             }
             await websocket.send_json(payload)
 
     except WebSocketDisconnect:
-        print("클라이언트 연결이 끊어졌습니다.")
+        print("[WS] 클라이언트 연결 종료")
     except Exception as e:
-        print(f"오류 발생: {e}")
+        print(f"[WS ERROR] {e}")

@@ -1,4 +1,6 @@
-# app/ml/pipeline.py
+# (현재 프론트엔드가 MediaPipe Pose를 처리하므로, 이 파일은 현재 실행 흐름에서 사용되지 않습니다.)
+# 향후 서버 사이드 영상 분석 또는 데이터 전처리 파이프라인에 사용할 수 있습니다.
+
 
 import cv2
 import mediapipe as mp
