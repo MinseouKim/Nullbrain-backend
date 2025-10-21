@@ -75,8 +75,11 @@ async def get_conversational_feedback(
 
 예시 출력:
 {{
-  "accuracy": 85,
-  "feedback": "자세가 불안정합니다. 좌우 불균형 데이터를 볼 때 왼쪽으로 쏠리는 경향이 있으니 중앙에 무게를 두세요."
+  "accuracy": 88,
+  "feedback": "허리 라인이 안정적입니다. 깊이는 충분하지만 무릎이 살짝 앞으로 갑니다.",
+  "tips": ["무릎이 발끝을 넘지 않게 유지", "시선은 정면 유지", "복부에 힘 주기"],
+  "risk_level": "low",
+  "overall_form": "좋은 자세"
 }}
 """
 
@@ -89,7 +92,7 @@ async def get_conversational_feedback(
             result = {"accuracy": 0, "feedback": "⚠️ AI 응답 파싱 실패"}
 
         return result
-    
+
     except Exception as e:
         print(f"--- GEMINI API ERROR ---")
         print(f"Error: {e}")

@@ -10,8 +10,9 @@ from app.api import ws
 from app.api.api_profile import router as profile_router
 from app.db import engine
 from app import models
-from app.api.api_measure import router as measure_router
 from app.api import api_analysis
+from app.api import api_profile   # 체형 분석 저장용
+from app.api import api_results, api_upload
 
 
 
@@ -48,5 +49,6 @@ app.add_middleware(
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 app.include_router(ws.router)
 app.include_router(profile_router)
-app.include_router(measure_router)
 app.include_router(api_analysis.router)
+app.include_router(api_results.router)
+app.include_router(api_upload.router)
