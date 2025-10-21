@@ -1,7 +1,9 @@
 import uuid
-from sqlalchemy import Column, Integer, DateTime, func, text
+from sqlalchemy import Column, Integer, String, DateTime, func, text, JSON  # ← String, JSON 추가됨
 from sqlalchemy.dialects.postgresql import UUID, JSONB
+from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from .db import Base
+
 
 class Profile(Base):
     __tablename__ = "profiles"
