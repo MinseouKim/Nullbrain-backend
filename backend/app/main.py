@@ -4,15 +4,12 @@ load_dotenv() # <-- FastAPI 앱이 시작되기 전에 .env 파일을 먼저 읽
 import os
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware  # [!code ++]
-from app.api import ws
 from app.api.api_profile import router as profile_router
 from app.db import engine
 from app import models
-from app.api import api_analysis
-from app.api import api_profile   # 체형 분석 저장용
-from app.api import api_results, api_upload
+from app.api import api_analysis   # 체형 분석 저장용
+from app.api import api_result, api_upload
 
 
 
@@ -47,8 +44,7 @@ app.add_middleware(
 
 # --- 기존 코드는 그대로 둡니다 --- #
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
-app.include_router(ws.router)
 app.include_router(profile_router)
 app.include_router(api_analysis.router)
-app.include_router(api_results.router)
+app.include_router(api_result.router)
 app.include_router(api_upload.router)
