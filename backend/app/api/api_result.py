@@ -3,6 +3,7 @@ from fastapi import APIRouter, Body, Depends
 from sqlalchemy.orm import Session
 from app.db import get_db
 from app.models import WorkoutResult
+from app.logic.gemini import get_overall_feedback
 
 router = APIRouter(prefix="/api", tags=["results"])
 

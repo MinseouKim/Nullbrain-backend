@@ -100,3 +100,38 @@ async def get_conversational_feedback(
             print(f"Prompt Feedback: {resp.prompt_feedback}")
         print(f"--------------------------")
         return {"accuracy": 0, "feedback": "⚠️ AI 피드백 생성에 실패했습니다."}
+
+async def get_overall_feedback(set_results: list[dict]) -> dict:
+    """
+    여러 세트의 AI 피드백, 정확도, 분석 데이터를 기반으로
+    전체적인 운동 품질, 자세 안정성, 향상 포인트를 종합적으로 평가.
+    """
+    if not model:
+        return {"overall_feedback": "⚠️ Gemini API Key가 설정되지 않았습니다."}
+
+    prompt = f"""
+당신은 피트니스 전문가 AI 트레이너입니다.
+아래는 사용자의 각 세트별 운동 분석 결과입니다.
+이 데이터를 기반으로 전체 운동에 대한 종합 피드백을 작성하세요.
+
+데이터:
+{json.dumps(set_results, ensure_ascii=False, indent=2)}
+
+작성 규칙:
+1. 전체적인 운동 수행 품질을 요약하세요 (정확도, 안정성, 피로도 등).
+2. 사용자의 개선점 2~3가지를 짧고 명확하게 제시하세요.
+3. 문장은 자연스러운 한국어로 작성하고, 200자 이내로 마무리하세요.
+4. JSON 형식으로 출력:
+{{
+  "overall_feedback": "문장",
+  "summary_accuracy": <평균 정확도>,
+  "improvement_tips": ["tip1", "tip2", ...]
+}}
+"""
+
+    try:
+        resp = await model.generate_content_async(prompt)
+        return json.loads(resp.text)
+    except Exception as e:
+        print("Gemini 전체 피드백 생성 오류:", e)
+        return {"overall_feedback": "⚠️ 종합 피드백 생성 실패"}

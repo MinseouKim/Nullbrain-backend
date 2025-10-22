@@ -10,6 +10,7 @@ from app.db import engine
 from app import models
 from app.api import api_analysis   # 체형 분석 저장용
 from app.api import api_result, api_upload
+from app.api import api_feedback
 
 
 
@@ -46,5 +47,6 @@ app.add_middleware(
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 app.include_router(profile_router)
 app.include_router(api_analysis.router)
+app.include_router(api_feedback.router)
 app.include_router(api_result.router)
 app.include_router(api_upload.router)
