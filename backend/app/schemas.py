@@ -4,6 +4,7 @@ from datetime import datetime
 from pydantic import BaseModel
 
 class ProfileCreate(BaseModel):
+    userId: str
     version: int = 1
     body: Dict[str, Any]
     measures: Dict[str, Any]
