@@ -1,4 +1,3 @@
-# backend/app/logic/gemini.py
 import os
 import json
 from typing import Optional, List
@@ -8,10 +7,51 @@ import google.generativeai as genai
 # --- 1. 환경 설정 ---
 load_dotenv()
 API_KEY = os.getenv("GOOGLE_API_KEY")
-MODEL_NAME = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+
+# [수정] 모델 목록 환경 변수 로드 (.env 파일에 정의된 대로)
+# 우선순위대로 콤마로 나열된 문자열을 읽어옵니다.
+FAST_MODELS_STR = os.getenv("GEMINI_FAST_MODELS", "gemini-2.5-flash")
+QUALITY_MODELS_STR = os.getenv("GEMINI_QUALITY_MODELS", "gemini-2.5-flash")
+
+# 콤마로 분리하여 리스트로 만듭니다.
+FAST_MODEL_LIST = [m.strip() for m in FAST_MODELS_STR.split(',') if m.strip()]
+QUALITY_MODEL_LIST = [m.strip() for m in QUALITY_MODELS_STR.split(',') if m.strip()]
+
 
 # --- 2. Gemini 모델 설정 ---
-model = None
+model_fast = None     # [수정] 빠른 피드백용 모델 인스턴스
+model_quality = None  # [수정] 종합 요약용 모델 인스턴스
+
+# [신규] 모델 초기화 헬퍼 함수
+def initialize_model_from_list(
+    model_list: List[str], 
+    generation_config: dict, 
+    safety_settings: list
+) -> Optional[genai.GenerativeModel]:
+    """
+    제공된 모델 이름 목록을 순회하며
+    가장 먼저 성공적으로 초기화되는 모델을 반환합니다.
+    """
+    if not API_KEY:
+        print("[ERROR] GOOGLE_API_KEY가 .env 파일에 설정되지 않았습니다.")
+        return None
+        
+    for model_name in model_list:
+        try:
+            model = genai.GenerativeModel(
+                model_name,
+                safety_settings=safety_settings,
+                generation_config=generation_config,
+            )
+            print(f"[INFO] 모델 초기화 성공: {model_name}")
+            return model
+        except Exception as e:
+            print(f"[WARN] 모델 초기화 실패: {model_name} (오류: {e}). 다음 모델을 시도합니다...")
+    
+    print(f"[ERROR] 목록에 있는 모델을 초기화하지 못했습니다: {model_list}")
+    return None
+
+# API 키가 있을 경우에만 모델 설정을 시도합니다.
 if API_KEY:
     genai.configure(api_key=API_KEY)
 
@@ -22,19 +62,29 @@ if API_KEY:
         {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
     ]
 
+    # JSON 응답을 위한 공통 설정
     generation_config = {
         "temperature": 0.7,
         "response_mime_type": "application/json",
     }
 
-    model = genai.GenerativeModel(
-        MODEL_NAME,
-        safety_settings=safety_settings,
-        generation_config=generation_config,
+    # [수정] 빠른 모델과 품질 모델을 별도로 초기화
+    print(f"[INFO] 빠른 피드백 모델 초기화 시도 (목록: {FAST_MODEL_LIST})...")
+    model_fast = initialize_model_from_list(
+        FAST_MODEL_LIST, generation_config, safety_settings
     )
+    
+    print(f"[INFO] 종합 요약 모델 초기화 시도 (목록: {QUALITY_MODEL_LIST})...")
+    model_quality = initialize_model_from_list(
+        QUALITY_MODEL_LIST, generation_config, safety_settings
+    )
+else:
+    print("[ERROR] GOOGLE_API_KEY를 찾을 수 없습니다. .env 파일을 확인하세요.")
 
 
 # --- 3. AI 피드백 생성 함수 ---
+
+# [수정] get_conversational_feedback 함수 (extra_context가 포함된 최종 버전만 남김)
 async def get_conversational_feedback(
     exercise_name: str,
     rep_counter: int,
@@ -43,75 +93,14 @@ async def get_conversational_feedback(
     real_time_analysis: Optional[dict] = None,
     angle: Optional[float] = None,
     history: Optional[List[str]] = None,
+    extra_context: Optional[dict] = None,  # 👈 추가된 파라미터
 ) -> dict:
     """
-    체형 및 실시간 분석 정보를 바탕으로 '정확도'와 '피드백'을 JSON으로 요청합니다.
+    [수정] '빠른 피드백' 모델(model_fast)을 사용하여 정확도와 피드백을 JSON으로 요청합니다.
     """
-    if not model:
-        return {"accuracy": 0, "feedback": "⚠️ Gemini API Key가 설정되지 않았습니다."}
-
-    profile_section = f"* 사용자의 체형 분석 정보 (정적 데이터):\n{body_profile}\n" if body_profile else ""
-    analysis_section = f"* 이번 세트의 실시간 움직임 분석 결과 (동적 데이터):\n{real_time_analysis}\n" if real_time_analysis else ""
-
-    prompt = f"""
-    당신은 사용자의 정적 체형 데이터와 실시간 움직임 데이터를 종합적으로 분석하는 전문 AI 퍼스널 트레이너입니다. 
-    아래에 제공된 분석 결과들은 참고용 데이터입니다.
-    이 내용을 그대로 반복하거나 인용하지 말고, 당신의 판단으로 최종 종합 피드백을 만들어야 합니다.
-
-    다음 두 가지 데이터를 바탕으로 분석하세요:
-
-    {profile_section}
-    {analysis_section}
-
-    * 현재 운동 정보 (참고용):
-    - 운동 종류: {exercise_name}
-    - 단계: {stage}
-    - 반복 횟수: {rep_counter}  
-
-    * JSON 출력 규칙:
-    1. "accuracy": 0~100 범위의 정수로 전체 동작 정확도를 평가하세요.
-    2. "feedback": 위의 데이터를 참고하되, 단순 복붙이 아닌 당신의 종합 판단으로 **70자 이내의 자연스러운 한국어 문장**을 만드세요.
-    3. 피드백에는 "좌우", "깊이" 등 세부 지표 단어를 직접 인용하지 말고, 종합적인 느낌을 전달하세요.
-
-    예시 출력:
-    {{
-    "accuracy": 88,
-    "feedback": "허리 라인이 안정적입니다. 깊이는 충분하지만 무릎이 살짝 앞으로 갑니다.",
-    "tips": ["무릎이 발끝을 넘지 않게 유지", "시선은 정면 유지", "복부에 힘 주기"],
-    "risk_level": "low",
-    "overall_form": "좋은 자세"
-    }}
-    """
-    try:
-        resp = await model.generate_content_async(prompt)
-        try:
-            result = json.loads(resp.text)
-        except Exception:
-            print(f"[WARN] Gemini 응답이 JSON 형식이 아님: {resp.text}")
-            result = {"accuracy": 0, "feedback": "⚠️ AI 응답 파싱 실패"}
-
-        return result
-    except Exception as e:
-        print(f"--- GEMINI API ERROR ---")
-        print(f"Error: {e}")
-        if "resp" in locals() and hasattr(resp, "prompt_feedback"):
-            print(f"Prompt Feedback: {resp.prompt_feedback}")
-        print(f"--------------------------")
-        return {"accuracy": 0, "feedback": "⚠️ AI 피드백 생성에 실패했습니다."}
-
-async def get_conversational_feedback(
-    exercise_name: str,
-    rep_counter: int,
-    stage: str,
-    body_profile: Optional[dict] = None,
-    real_time_analysis: Optional[dict] = None,
-    angle: Optional[float] = None,
-    history: Optional[List[str]] = None,
-    extra_context: Optional[dict] = None,  # 👈 추가
-) -> dict:
-
-    if not model:
-        return {"accuracy": 0, "feedback": "⚠️ Gemini API Key가 설정되지 않았습니다."}
+    # [수정] model_fast 인스턴스를 사용하도록 변경
+    if not model_fast:
+        return {"accuracy": 0, "feedback": "⚠️ Gemini 'FAST' 모델이 설정되지 않았습니다."}
 
     profile_section = f"* 사용자의 체형 분석 정보 (정적 데이터):\n{body_profile}\n" if body_profile else ""
     analysis_section = f"* 이번 세트의 실시간 움직임/히스토리 (동적 데이터):\n{real_time_analysis}\n" if real_time_analysis else ""
@@ -146,7 +135,8 @@ async def get_conversational_feedback(
     """
 
     try:
-        resp = await model.generate_content_async(prompt)
+        # [수정] model_fast.generate_content_async 사용
+        resp = await model_fast.generate_content_async(prompt)
         try:
             result = json.loads(resp.text)
         except Exception:
@@ -154,17 +144,20 @@ async def get_conversational_feedback(
             result = {"accuracy": 0, "feedback": "⚠️ AI 응답 파싱 실패"}
         return result
     except Exception as e:
-        print(f"--- GEMINI API ERROR ---\nError: {e}\n--------------------------")
+        print(f"--- GEMINI API ERROR (FAST) ---\nError: {e}\n--------------------------")
+        if "resp" in locals() and hasattr(resp, "prompt_feedback"):
+            print(f"Prompt Feedback: {resp.prompt_feedback}")
         return {"accuracy": 0, "feedback": "⚠️ AI 피드백 생성에 실패했습니다."}
     
-    
+
 async def get_overall_feedback(set_results: list[dict]) -> dict:
     """
-    여러 세트의 AI 피드백, 정확도, 분석 데이터를 기반으로
+    [수정] '종합 요약' 모델(model_quality)을 사용하여
     전체적인 운동 품질, 자세 안정성, 향상 포인트를 종합적으로 평가.
     """
-    if not model:
-        return {"overall_feedback": "⚠️ Gemini API Key가 설정되지 않았습니다."}
+    # [수정] model_quality 인스턴스를 사용하도록 변경
+    if not model_quality:
+        return {"overall_feedback": "⚠️ Gemini 'QUALITY' 모델이 설정되지 않았습니다."}
 
     prompt = f"""
     당신은 피트니스 전문가 AI 트레이너입니다.
@@ -186,8 +179,11 @@ async def get_overall_feedback(set_results: list[dict]) -> dict:
     }}
     """
     try:
-        resp = await model.generate_content_async(prompt)
+        # [수정] model_quality.generate_content_async 사용
+        resp = await model_quality.generate_content_async(prompt)
         return json.loads(resp.text)
     except Exception as e:
-        print("Gemini 전체 피드백 생성 오류:", e)
+        print(f"--- GEMINI API ERROR (QUALITY) ---\nError: {e}\n--------------------------")
+        if "resp" in locals() and hasattr(resp, "prompt_feedback"):
+            print(f"Prompt Feedback: {resp.prompt_feedback}")
         return {"overall_feedback": "⚠️ 종합 피드백 생성 실패"}
