@@ -5,7 +5,35 @@ from app.logic.gemini import get_conversational_feedback, get_overall_feedback
 from app.logic.analysis_utils import get_latest_profile
 from app.db import get_db
 
+import json
+from typing import Any, Dict
+
 router = APIRouter(prefix="/api/feedback", tags=["Feedback"])
+
+def _normalize_feedback(res: Any) -> Dict[str, Any]:
+    """
+    Gemini 응답을 dict로 강제 정규화.
+    - dict 그대로면 반환
+    - list면 첫 dict를 선택 (없으면 빈 dict/tips 감싸기)
+    - str이면 JSON 파싱 후 재귀 처리, 실패하면 {"feedback": str}
+    - 그 외는 빈 dict
+    """
+    if res is None:
+        return {}
+    if isinstance(res, dict):
+        return res
+    if isinstance(res, list):
+        for item in res:
+            if isinstance(item, dict):
+                return item
+        return {"feedback": "AI 피드백 생성 실패", "tips": res}
+    if isinstance(res, str):
+        try:
+            obj = json.loads(res)
+            return _normalize_feedback(obj)
+        except Exception:
+            return {"feedback": res}
+    return {}
 
 @router.post("/set")
 async def feedback_per_set(data: dict = Body(...), db: Session = Depends(get_db)):
@@ -45,7 +73,7 @@ async def feedback_per_set(data: dict = Body(...), db: Session = Depends(get_db)
         "target_reps": target_reps,
     }
 
-    result = await get_conversational_feedback(
+    raw = await get_conversational_feedback(
         exercise_name=exercise_id,
         rep_counter=rep_count,
         stage=stage,
@@ -54,14 +82,25 @@ async def feedback_per_set(data: dict = Body(...), db: Session = Depends(get_db)
         extra_context=extra,   # 👈 추가
     )
 
+    result = _normalize_feedback(raw)
+
+    # 타입 가드
+    feedback    = result.get("feedback", "AI 피드백 생성 실패")
+    accuracy    = result.get("accuracy", 0)
+    tips        = result.get("tips", [])
+    if isinstance(tips, str):
+        tips = [tips]
+    risk_level  = result.get("risk_level", "unknown")
+
     return {
-        "feedback": result.get("feedback", "AI 피드백 생성 실패"),
-        "accuracy": result.get("accuracy", 0),
-        "tips": result.get("tips", []),
-        "risk_level": result.get("risk_level", "unknown"),
+        "feedback": feedback,
+        "accuracy": accuracy,
+        "tips": tips,
+        "risk_level": risk_level,
     }
 
 @router.post("/overall")
 async def feedback_overall(data: dict = Body(...)):
     set_results = data.get("set_results", [])
+    # gemini.py에서 이미 dict 강제/기본값 설정
     return await get_overall_feedback(set_results)
