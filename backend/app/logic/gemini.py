@@ -1,6 +1,6 @@
 import os
 import json
-from typing import Optional, List
+from typing import Optional, List, Any, Dict
 from dotenv import load_dotenv
 import google.generativeai as genai
 
@@ -8,50 +8,119 @@ import google.generativeai as genai
 load_dotenv()
 API_KEY = os.getenv("GOOGLE_API_KEY")
 
-# [수정] 모델 목록 환경 변수 로드 (.env 파일에 정의된 대로)
-# 우선순위대로 콤마로 나열된 문자열을 읽어옵니다.
+# 모델 목록 환경 변수
 FAST_MODELS_STR = os.getenv("GEMINI_FAST_MODELS", "gemini-2.5-flash")
 QUALITY_MODELS_STR = os.getenv("GEMINI_QUALITY_MODELS", "gemini-2.5-flash")
 
-# 콤마로 분리하여 리스트로 만듭니다.
 FAST_MODEL_LIST = [m.strip() for m in FAST_MODELS_STR.split(',') if m.strip()]
 QUALITY_MODEL_LIST = [m.strip() for m in QUALITY_MODELS_STR.split(',') if m.strip()]
 
-
 # --- 2. Gemini 모델 설정 ---
-model_fast = None     # [수정] 빠른 피드백용 모델 인스턴스
-model_quality = None  # [수정] 종합 요약용 모델 인스턴스
+model_fast = None     # 빠른 피드백
+model_quality = None  # 종합 요약
 
-# [신규] 모델 초기화 헬퍼 함수
+# ===== (A) 공통: 토큰/출력 최소화 설정 =====
+BASE_GENERATION_CONFIG = {
+    "temperature": 0.5,
+    "top_p": 0.9,
+    "top_k": 40,
+    "candidate_count": 1,
+    "response_mime_type": "application/json",
+    "max_output_tokens": 256,   # 출력 길이 제한
+}
+
+# system instruction: 매 호출마다 장문 규칙을 넣지 않기 위해 고정
+FAST_SYSTEM_INSTRUCTION = (
+    "당신은 한국어로 답하는 AI 퍼스널 트레이너입니다. "
+    "입력 JSON만 보고 핵심만 판단하며, 반드시 JSON으로만 응답하세요."
+)
+
+QUALITY_SYSTEM_INSTRUCTION = (
+    "당신은 피트니스 전문가입니다. 입력 JSON(세트별 결과 요약)만 보고 "
+    "200자 이내 한국어로 종합 피드백을 JSON으로만 응답하세요."
+)
+
+# 이 파일 내에서 동적으로 바꿔 끼울 전역 지시문
+_SYSTEM_INSTRUCTION: str = ""
+
+# [신규] 입력 축소 유틸: 숫자 반올림/긴 텍스트 자르기
+def _round_num(v: Any, nd: int = 3) -> Any:
+    if isinstance(v, float):
+        return round(v, nd)
+    if isinstance(v, list):
+        return [_round_num(x, nd) for x in v]
+    if isinstance(v, dict):
+        return {k: _round_num(v[k], nd) for k in v}
+    return v
+
+def _truncate_str(s: Any, maxlen: int = 200) -> Any:
+    if isinstance(s, str) and len(s) > maxlen:
+        return s[:maxlen] + "…"
+    return s
+
+def _compact_set_item(item: Dict[str, Any]) -> Dict[str, Any]:
+    """세트 결과에서 거대 필드 제거 및 최소 요약만 남김"""
+    meta = item.get("meta") or {}
+    stats = item.get("stats") or {}
+    # accuracy/칼로리/시간 등만 남기고 숫자는 반올림
+    compact_stats = {
+        "accuracy": stats.get("accuracy"),
+        "calories": stats.get("calories"),
+        "avg_speed": stats.get("avg_speed"),
+        "tempo": stats.get("tempo"),
+    }
+    compact_stats = _round_num(compact_stats, 3)
+
+    # 길 수 있는 텍스트는 잘라줌
+    ai_feedback = _truncate_str(item.get("aiFeedback", ""), 180)
+
+    # 절대 금지: analysisData, landmarkHistory 같은 초대형 필드
+    return {
+        "meta": {
+            "setIndex": meta.get("setIndex"),
+            "totalSets": meta.get("totalSets"),
+            "targetReps": meta.get("targetReps"),
+            "exerciseId": meta.get("exerciseId"),
+            "exerciseName": meta.get("exerciseName"),
+        },
+        "stats": compact_stats,
+        "aiFeedback": ai_feedback,
+        # 필요한 경우 간단한 규칙성 태그 정도만 유지할 수 있음
+    }
+
+def _compact_set_results(set_results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    # 길면 최근 N개만, 또는 전부 얕게: 여기서는 전부 얕게 + 최대 12세트까지만
+    MAX_SETS = 12
+    compact = []
+    for i, it in enumerate(set_results[:MAX_SETS]):
+        compact.append(_compact_set_item(it))
+    return compact
+
+# [신규] 모델 초기화 헬퍼 (system_instruction 주입 + generation_config 사용)
 def initialize_model_from_list(
-    model_list: List[str], 
-    generation_config: dict, 
+    model_list: List[str],
+    generation_config: dict,
     safety_settings: list
 ) -> Optional[genai.GenerativeModel]:
-    """
-    제공된 모델 이름 목록을 순회하며
-    가장 먼저 성공적으로 초기화되는 모델을 반환합니다.
-    """
     if not API_KEY:
         print("[ERROR] GOOGLE_API_KEY가 .env 파일에 설정되지 않았습니다.")
         return None
-        
     for model_name in model_list:
         try:
             model = genai.GenerativeModel(
                 model_name,
                 safety_settings=safety_settings,
                 generation_config=generation_config,
+                system_instruction=_SYSTEM_INSTRUCTION,  # 👈 고정 지시
             )
             print(f"[INFO] 모델 초기화 성공: {model_name}")
             return model
         except Exception as e:
             print(f"[WARN] 모델 초기화 실패: {model_name} (오류: {e}). 다음 모델을 시도합니다...")
-    
     print(f"[ERROR] 목록에 있는 모델을 초기화하지 못했습니다: {model_list}")
     return None
 
-# API 키가 있을 경우에만 모델 설정을 시도합니다.
+# API 키 설정 및 모델 준비
 if API_KEY:
     genai.configure(api_key=API_KEY)
 
@@ -62,21 +131,18 @@ if API_KEY:
         {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
     ]
 
-    # JSON 응답을 위한 공통 설정
-    generation_config = {
-        "temperature": 0.7,
-        "response_mime_type": "application/json",
-    }
-
-    # [수정] 빠른 모델과 품질 모델을 별도로 초기화
+    # 빠른 피드백 모델
     print(f"[INFO] 빠른 피드백 모델 초기화 시도 (목록: {FAST_MODEL_LIST})...")
+    _SYSTEM_INSTRUCTION = FAST_SYSTEM_INSTRUCTION
     model_fast = initialize_model_from_list(
-        FAST_MODEL_LIST, generation_config, safety_settings
+        FAST_MODEL_LIST, BASE_GENERATION_CONFIG, safety_settings
     )
-    
+
+    # 종합 요약 모델
     print(f"[INFO] 종합 요약 모델 초기화 시도 (목록: {QUALITY_MODEL_LIST})...")
+    _SYSTEM_INSTRUCTION = QUALITY_SYSTEM_INSTRUCTION
     model_quality = initialize_model_from_list(
-        QUALITY_MODEL_LIST, generation_config, safety_settings
+        QUALITY_MODEL_LIST, BASE_GENERATION_CONFIG, safety_settings
     )
 else:
     print("[ERROR] GOOGLE_API_KEY를 찾을 수 없습니다. .env 파일을 확인하세요.")
@@ -84,7 +150,7 @@ else:
 
 # --- 3. AI 피드백 생성 함수 ---
 
-# [수정] get_conversational_feedback 함수 (extra_context가 포함된 최종 버전만 남김)
+# (1) 빠른 피드백
 async def get_conversational_feedback(
     exercise_name: str,
     rep_counter: int,
@@ -93,93 +159,72 @@ async def get_conversational_feedback(
     real_time_analysis: Optional[dict] = None,
     angle: Optional[float] = None,
     history: Optional[List[str]] = None,
-    extra_context: Optional[dict] = None,  # 👈 추가된 파라미터
+    extra_context: Optional[dict] = None,
 ) -> dict:
     """
-    [수정] '빠른 피드백' 모델(model_fast)을 사용하여 정확도와 피드백을 JSON으로 요청합니다.
+    '빠른 피드백' 모델(model_fast)을 사용하여 정확도와 피드백을 JSON으로 요청합니다.
     """
-    # [수정] model_fast 인스턴스를 사용하도록 변경
     if not model_fast:
         return {"accuracy": 0, "feedback": "⚠️ Gemini 'FAST' 모델이 설정되지 않았습니다."}
 
-    profile_section = f"* 사용자의 체형 분석 정보 (정적 데이터):\n{body_profile}\n" if body_profile else ""
-    analysis_section = f"* 이번 세트의 실시간 움직임/히스토리 (동적 데이터):\n{real_time_analysis}\n" if real_time_analysis else ""
-    extra_section = f"* 추가 맥락(표시명/세트/타깃):\n{extra_context}\n" if extra_context else ""
-
-    # 표시용 한글 이름 우선 사용
+    # ✅ 프롬프트를 장문 규칙 없이 '데이터 JSON'만 보내도록 축소
     disp = (extra_context or {}).get("exercise_display_name") or exercise_name
-    set_idx = (extra_context or {}).get("set_index")
-    total_sets = (extra_context or {}).get("total_sets")
-    target_reps = (extra_context or {}).get("target_reps")
+    payload = {
+        "exercise_display_name": disp,
+        "exercise_id": exercise_name,
+        "stage": stage,
+        "rep_counter": rep_counter,
+        "target_reps": (extra_context or {}).get("target_reps"),
+        "set": {
+            "index": (extra_context or {}).get("set_index"),
+            "total": (extra_context or {}).get("total_sets"),
+        },
+        # 큰 데이터는 슬림화
+        "user_profile": _round_num(body_profile, 3) if body_profile else None,
+        "realtime_summary": _round_num(real_time_analysis, 3) if real_time_analysis else None,
+        "angle_sample": _round_num(angle, 3) if angle is not None else None,
+        # 히스토리는 최근 N개만 (과도한 텍스트 방지)
+        "history_tail": history[-20:] if history and len(history) > 20 else history,
+    }
 
-    prompt = f"""
-    당신은 한국어로 답하는 전문 AI 퍼스널 트레이너입니다.
-    아래의 정적/동적/추가 맥락을 참조하되, 그대로 복붙하지 말고 **종합 판단**을 제공하세요.
-
-    {profile_section}
-    {analysis_section}
-    {extra_section}
-
-    * 현재 운동 정보:
-    - 운동(표시명): {disp}
-    - 운동(내부ID): {exercise_name}
-    - 단계: {stage}
-    - 반복 횟수(실행): {rep_counter}
-    - 목표 반복수(세트당): {target_reps}
-    - 현재 세트/총 세트: {set_idx}/{total_sets}
-
-    * JSON 출력 규칙:
-    1) "accuracy": 0~100 정수
-    2) "feedback": **70자 이내 한국어**로 핵심만 자연스럽게 (특정 지표 단어 직인용 지양)
-    3) 선택: "tips": ["짧은 팁"...], "risk_level": "low|mid|high"
-    """
+    # 공백 제거하여 토큰 절약
+    prompt = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
     try:
-        # [수정] model_fast.generate_content_async 사용
         resp = await model_fast.generate_content_async(prompt)
         try:
-            result = json.loads(resp.text)
+            return json.loads(resp.text)
         except Exception:
             print(f"[WARN] Gemini 응답이 JSON 형식이 아님: {resp.text}")
-            result = {"accuracy": 0, "feedback": "⚠️ AI 응답 파싱 실패"}
-        return result
+            return {"accuracy": 0, "feedback": "⚠️ AI 응답 파싱 실패"}
     except Exception as e:
         print(f"--- GEMINI API ERROR (FAST) ---\nError: {e}\n--------------------------")
         if "resp" in locals() and hasattr(resp, "prompt_feedback"):
             print(f"Prompt Feedback: {resp.prompt_feedback}")
         return {"accuracy": 0, "feedback": "⚠️ AI 피드백 생성에 실패했습니다."}
-    
 
+# (2) 종합 피드백
 async def get_overall_feedback(set_results: list[dict]) -> dict:
     """
-    [수정] '종합 요약' 모델(model_quality)을 사용하여
-    전체적인 운동 품질, 자세 안정성, 향상 포인트를 종합적으로 평가.
+    '종합 요약' 모델(model_quality)을 사용하여 운동 전체에 대한 요약/개선 포인트를 생성.
     """
-    # [수정] model_quality 인스턴스를 사용하도록 변경
     if not model_quality:
         return {"overall_feedback": "⚠️ Gemini 'QUALITY' 모델이 설정되지 않았습니다."}
 
-    prompt = f"""
-    당신은 피트니스 전문가 AI 트레이너입니다.
-    아래는 사용자의 각 세트별 운동 분석 결과입니다.
-    이 데이터를 기반으로 전체 운동에 대한 종합 피드백을 작성하세요.
+    # ✅ 입력 축소: 거대 필드 제거 + 숫자 반올림 + 최근 N세트 제한
+    compact_sets = _compact_set_results(set_results)
 
-    데이터:
-    {json.dumps(set_results, ensure_ascii=False, indent=2)}
+    payload = {
+        "sets": compact_sets,
+        # 평균 정확도(있으면) 프리컴퓨트해서 힌트 제공 → 모델 추론 부담 감소
+        "avg_accuracy_hint": _round_num(
+            sum([(s.get("stats") or {}).get("accuracy", 0) or 0 for s in compact_sets]) / max(len(compact_sets), 1), 2
+        ) if compact_sets else 0.0
+    }
 
-    작성 규칙:
-    1. 전체적인 운동 수행 품질을 요약하세요 (정확도, 안정성, 피로도 등).
-    2. 사용자의 개선점 2~3가지를 짧고 명확하게 제시하세요.
-    3. 문장은 자연스러운 한국어로 작성하고, 200자 이내로 마무리하세요.
-    4. JSON 형식으로 출력:
-    {{
-    "overall_feedback": "문장",
-    "summary_accuracy": <평균 정확도>,
-    "improvement_tips": ["tip1", "tip2", ...]
-    }}
-    """
+    prompt = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
     try:
-        # [수정] model_quality.generate_content_async 사용
         resp = await model_quality.generate_content_async(prompt)
         return json.loads(resp.text)
     except Exception as e:
